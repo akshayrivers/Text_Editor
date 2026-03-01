@@ -1,7 +1,7 @@
 use super::terminal::Size;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use std::{convert::TryFrom, usize};
-
+#[derive(Clone, Copy)]
 pub enum Direction {
     PageUp,
     PageDown,
@@ -12,7 +12,7 @@ pub enum Direction {
     Right,
     Down,
 }
-
+#[derive(Clone, Copy)]
 pub enum EditorCommand {
     Move(Direction),
     Resize(Size),

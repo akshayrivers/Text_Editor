@@ -2,6 +2,7 @@ use self::line::Line;
 use super::{
     editorcommand::{Direction, EditorCommand},
     terminal::{Position, Size, Terminal},
+    DocumentStatus,
 };
 use std::cmp::min;
 mod buffer;
@@ -23,6 +24,27 @@ pub struct View {
 }
 
 impl View {
+    pub fn new(margin_bottom: usize) -> Self {
+        let terminal_size = Terminal::size().unwrap_or_default();
+        Self {
+            buffer: Buffer::default(),
+            needs_redraw: true,
+            size: Size {
+                height: terminal_size.height.saturating_sub(margin_bottom),
+                width: terminal_size.width,
+            },
+            text_location: Location::default(),
+            scroll_offset: Position::default(),
+        }
+    }
+    pub fn get_status(&self) -> DocumentStatus {
+        DocumentStatus {
+            file_name: self.buffer.file_name.clone(),
+            total_lines: self.buffer.height(),
+            current_line_index: self.text_location.line_index,
+            is_modified: self.buffer.dirty,
+        }
+    }
     pub fn render(&mut self) {
         if !self.needs_redraw {
             return;
@@ -52,7 +74,7 @@ impl View {
     pub fn handle_command(&mut self, command: EditorCommand) {
         match command {
             EditorCommand::Resize(size) => self.resize(size),
-            EditorCommand::Move(direction) => self.move_text_location(&direction),
+            EditorCommand::Move(direction) => self.move_text_location(direction),
             EditorCommand::Quit => {}
             EditorCommand::Insert(character) => self.insert_char(character),
             EditorCommand::Backspace => self.delete_backward(),
@@ -73,7 +95,7 @@ impl View {
         self.scroll_text_location_into_view();
         self.needs_redraw = true;
     }
-    fn save(&self) {
+    fn save(&mut self) {
         let _ = self.buffer.save();
     }
     fn insert_char(&mut self, character: char) {
@@ -91,18 +113,18 @@ impl View {
         let grapheme_delta = new_len.saturating_sub(old_len);
         if grapheme_delta > 0 {
             // we move right with scroll handling
-            self.move_text_location(&Direction::Right);
+            self.move_text_location(Direction::Right);
         }
         self.needs_redraw = true;
     }
     fn insert_newline(&mut self) {
         self.buffer.insert_newline(self.text_location);
-        self.move_text_location(&Direction::Right);
+        self.move_text_location(Direction::Right);
         self.needs_redraw = true;
     }
     fn delete_backward(&mut self) {
         if self.text_location.line_index != 0 || self.text_location.grapheme_index != 0 {
-            self.move_text_location(&Direction::Left);
+            self.move_text_location(Direction::Left);
             self.delete();
         }
     }
@@ -184,7 +206,7 @@ impl View {
     // TEXT LOCATION MOVEMENT
     // clippy::arithmetic_side_effects: This function performs arithmetic calculations
     // after explicitly checking that the target value will be within bounds.
-    fn move_text_location(&mut self, direction: &Direction) {
+    fn move_text_location(&mut self, direction: Direction) {
         // This match moves the positon, but does not check for all boundaries.
         // The final boundarline checking happens after the match statement.
         let Size { height, .. } = self.size;
@@ -261,17 +283,5 @@ impl View {
     // Doesn't trigger scrolling.
     fn snap_to_valid_line(&mut self) {
         self.text_location.line_index = min(self.text_location.line_index, self.buffer.height());
-    }
-}
-
-impl Default for View {
-    fn default() -> Self {
-        Self {
-            buffer: Buffer::default(),
-            needs_redraw: true,
-            size: Terminal::size().unwrap_or_default(),
-            text_location: Location::default(),
-            scroll_offset: Position::default(),
-        }
     }
 }

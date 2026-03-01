@@ -8,14 +8,24 @@ mod terminal;
 mod view;
 use crossterm::event::{read, Event, KeyEvent, KeyEventKind};
 use terminal::Terminal;
-
+mod statusbar;
+use statusbar::StatusBar;
 use view::View;
 
 use editorcommand::EditorCommand;
 
+#[derive(Default, Eq, PartialEq, Debug)]
+pub struct DocumentStatus {
+    file_name: Option<String>,
+    total_lines: usize,
+    current_line_index: usize,
+    is_modified: bool,
+}
+
 pub struct Editor {
     should_quit: bool,
     view: View,
+    status_bar: StatusBar,
 }
 
 impl Editor {
@@ -26,7 +36,7 @@ impl Editor {
             current_hook(panic_info);
         }));
         Terminal::initialize()?;
-        let mut view = View::default();
+        let mut view = View::new(2);
 
         let args: Vec<String> = env::args().collect();
         if let Some(file_name) = args.get(1) {
@@ -35,6 +45,7 @@ impl Editor {
         Ok(Self {
             should_quit: false,
             view,
+            status_bar: StatusBar::new(1),
         })
     }
 
@@ -53,6 +64,8 @@ impl Editor {
                     }
                 }
             }
+            let status = self.view.get_status();
+            self.status_bar.update_status(status);
         }
     }
 
@@ -72,6 +85,9 @@ impl Editor {
                     self.should_quit = true;
                 } else {
                     self.view.handle_command(command);
+                    if let EditorCommand::Resize(size) = command {
+                        self.status_bar.resize(size);
+                    }
                 }
             }
         }
@@ -80,6 +96,7 @@ impl Editor {
     fn refresh_screen(&mut self) {
         let _ = Terminal::hide_caret();
         self.view.render();
+        self.status_bar.render();
         let _ = Terminal::move_caret_to(self.view.caret_position());
 
         let _ = Terminal::show_caret();
@@ -96,4 +113,5 @@ impl Drop for Editor {
 }
 
 // A heart cannot be ruled, it can only be cared for, loved
-// And yet
+// And yet one must surrender everything to love truly
+// A paradoxical choice
