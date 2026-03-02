@@ -117,6 +117,9 @@ impl Line {
             })
             .sum()
     }
+    pub fn width(&self) -> usize {
+        self.width_until(self.grapheme_count())
+    }
     pub fn insert_char(&mut self, character: char, at: usize) {
         let mut result = String::new();
         for (index, fragment) in self.fragments.iter().enumerate() {
@@ -130,6 +133,9 @@ impl Line {
         }
         self.fragments = Self::str_to_fragments(&result);
     }
+    pub fn append_char(&mut self, character: char) {
+        self.insert_char(character, self.grapheme_count());
+    }
     pub fn delete(&mut self, at: usize) {
         let mut result = String::new();
 
@@ -139,6 +145,9 @@ impl Line {
             }
         }
         self.fragments = Self::str_to_fragments(&result)
+    }
+    pub fn delete_last(&mut self) {
+        self.delete(self.grapheme_count().saturating_sub(1));
     }
     pub fn append(&mut self, other: &Self) {
         let mut concat = self.to_string();
