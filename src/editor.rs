@@ -6,12 +6,16 @@ use std::{
 mod documentstatus;
 mod editorcommand;
 mod fileinfo;
+mod message;
+mod messagebar;
 mod terminal;
 mod view;
 use crossterm::event::{read, Event, KeyEvent, KeyEventKind};
 use terminal::Terminal;
 mod statusbar;
 use documentstatus::DocumentStatus;
+use message::Message;
+use messagebar::MessageBar;
 use statusbar::StatusBar;
 use view::View;
 
@@ -23,6 +27,7 @@ pub struct Editor {
     should_quit: bool,
     view: View,
     status_bar: StatusBar,
+    message_bar: MessageBar,
     title: String,
 }
 
@@ -38,6 +43,7 @@ impl Editor {
             should_quit: false,
             view: View::new(2),
             status_bar: StatusBar::new(1),
+            message_bar: MessageBar::new(0),
             title: String::new(),
         };
 
@@ -95,6 +101,7 @@ impl Editor {
                     self.view.handle_command(command);
                     if let EditorCommand::Resize(size) = command {
                         self.status_bar.resize(size);
+                        self.message_bar.resize(size);
                     }
                 }
             }
@@ -105,6 +112,7 @@ impl Editor {
         let _ = Terminal::hide_caret();
         self.view.render();
         self.status_bar.render();
+        self.message_bar.render();
         let _ = Terminal::move_caret_to(self.view.caret_position());
 
         let _ = Terminal::show_caret();
