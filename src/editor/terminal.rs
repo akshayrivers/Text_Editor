@@ -106,7 +106,7 @@ impl Terminal {
         )
     }
 }
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, Eq, PartialEq)]
 pub struct Size {
     pub height: usize,
     pub width: usize,
