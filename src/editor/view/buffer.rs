@@ -23,22 +23,61 @@ impl Buffer {
             dirty: false,
         })
     }
-    pub fn search(&self, query: &str, from: Location) -> Option<Location> {
-        for (line_idx, line) in self.lines.iter().enumerate().skip(from.line_idx) {
-            let from_grapheme_idx = if line_idx == from.line_idx {
+    pub fn search_forward(&self, query: &str, from: Location) -> Option<Location> {
+        //finally iterator magic
+        if query.is_empty() {
+            return None;
+        }
+        let mut is_first = true;
+        for (line_idx, line) in self
+            .lines
+            .iter()
+            .enumerate()
+            .cycle()
+            .skip(from.line_idx)
+            .take(self.lines.len().saturating_add(1))
+        {
+            let from_grapheme_idx = if is_first {
+                is_first = false;
                 from.grapheme_idx
             } else {
                 0
             };
-            if let Some(grapheme_idx) = line.search(query, from_grapheme_idx) {
+            if let Some(grapheme_idx) = line.search_forward(query, from_grapheme_idx) {
                 return Some(Location {
                     grapheme_idx,
                     line_idx,
                 });
             }
         }
-        for (line_idx, line) in self.lines.iter().enumerate().take(from.line_idx) {
-            if let Some(grapheme_idx) = line.search(query, 0) {
+        None
+    }
+    pub fn search_backward(&self, query: &str, from: Location) -> Option<Location> {
+        if query.is_empty() {
+            return None;
+        }
+        let mut is_first = true;
+        for (line_idx, line) in self
+            .lines
+            .iter()
+            .enumerate()
+            .rev()
+            .cycle()
+            .skip(
+                self.lines
+                    .len()
+                    .saturating_sub(from.line_idx)
+                    .saturating_sub(1),
+            )
+            .take(self.lines.len().saturating_add(1))
+        {
+            let from_grapheme_idx = if is_first {
+                is_first = false;
+                from.grapheme_idx
+            } else {
+                line.grapheme_count()
+            };
+            if let Some(grapheme_idx) = line.search_backward(query, from_grapheme_idx) {
                 return Some(Location {
                     grapheme_idx,
                     line_idx,
@@ -52,6 +91,11 @@ impl Buffer {
             let mut file = File::create(file_path)?;
             for line in &self.lines {
                 writeln!(file, "{line}")?;
+            }
+        } else {
+            #[cfg(debug_assertions)]
+            {
+                panic!("Attempting to save with no file path present");
             }
         }
         Ok(())
@@ -78,9 +122,7 @@ impl Buffer {
         self.lines.len()
     }
     pub fn insert_char(&mut self, character: char, at: Location) {
-        if at.line_idx > self.height() {
-            return;
-        }
+        debug_assert!(at.line_idx <= self.height());
         if at.line_idx == self.height() {
             self.lines.push(Line::from(&character.to_string()));
             self.dirty = true;

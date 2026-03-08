@@ -30,7 +30,7 @@ use view::View;
 use self::command::{
     Command::{self, Edit, Move, System},
     Edit::InsertNewLine,
-    Move::{Down, Right},
+    Move::{Down, Left, Right, Up},
     System::{Dismiss, Quit, Resize, Save, Search},
 };
 
@@ -79,6 +79,7 @@ impl Editor {
         editor.update_message("HELP: Ctrl-F = find | Ctrl-S = save | Ctrl-Q = quit");
         let args: Vec<String> = env::args().collect();
         if let Some(file_name) = args.get(1) {
+            debug_assert!(!file_name.is_empty());
             if editor.view.load(file_name).is_err() {
                 editor.update_message(&format!("ERR:Could not open file: {file_name}"));
             }
@@ -103,6 +104,11 @@ impl Editor {
                     #[cfg(debug_assertions)]
                     {
                         panic!("Could not read event:{err:?}");
+                    }
+                    #[cfg(not(debug_assertions))]
+                    {
+                        let _ = err;
+                        // the code has produced a warning in a release build. because _err iis unused. This addition fixes that
                     }
                 }
             }
@@ -135,6 +141,8 @@ impl Editor {
         } else {
             self.view.caret_position()
         };
+        debug_assert!(new_caret_pos.col <= self.terminal_size.width);
+        debug_assert!(new_caret_pos.row <= self.terminal_size.height);
         let _ = Terminal::move_caret_to(new_caret_pos);
 
         let _ = Terminal::show_caret();
@@ -286,6 +294,7 @@ impl Editor {
                 self.view.search(&query);
             }
             Move(Right | Down) => self.view.search_next(),
+            Move(Up | Left) => self.view.search_prev(),
             System(Quit | Resize(_) | Search | Save) | Move(_) => {} // Not applicable during save, Resize already handled at this stage
         }
     }
