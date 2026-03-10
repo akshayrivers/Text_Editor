@@ -1,12 +1,9 @@
 use super::ByteIdx;
+use super::{Annotation, AnnotationType};
 use std::{
     cmp::{max, min},
     fmt::{self, Display},
 };
-pub mod annotationtype;
-pub use annotationtype::AnnotationType;
-mod annotation;
-use annotation::Annotation;
 mod annotatedstringpart;
 use annotatedstringpart::AnnotatedStringPart;
 mod annotatedstringiterator;
