@@ -1,6 +1,6 @@
 use super::FileInfo;
 use super::Line;
-use super::Location;
+use crate::prelude::*;
 use std::io::Write;
 use std::{fs::read_to_string, fs::File, io::Error};
 #[derive(Default)]

@@ -1,9 +1,8 @@
-pub type Row = usize;
-pub type Col = usize;
+use super::{ColIdx, RowIdx};
 #[derive(Copy, Clone, Default)]
 pub struct Position {
-    pub col: Col,
-    pub row: Row,
+    pub col: ColIdx,
+    pub row: RowIdx,
 }
 
 impl Position {

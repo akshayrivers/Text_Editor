@@ -1,4 +1,4 @@
-use super::super::Size;
+use crate::prelude::*;
 use crossterm::event::{
     KeyCode::{self, Char},
     KeyEvent, KeyModifiers,

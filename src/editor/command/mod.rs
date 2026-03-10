@@ -5,9 +5,8 @@ pub use movecommand::Move;
 mod system;
 pub use system::System;
 mod edit;
+use crate::prelude::*;
 pub use edit::Edit;
-
-use super::Size;
 
 #[derive(Clone, Copy)]
 pub enum Command {

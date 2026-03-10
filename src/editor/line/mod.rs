@@ -1,8 +1,9 @@
+use crate::prelude::*;
 use std::{
+    cmp::min,
     fmt::{self, Display},
     ops::{Deref, Range},
 };
-
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 mod graphemewidth;
@@ -10,11 +11,7 @@ mod textfragment;
 use graphemewidth::GraphemeWidth;
 use textfragment::TextFragment;
 
-use super::{AnnotatedString, AnnotationType, Col};
-
-type GraphemeIdx = usize;
-type ByteIdx = usize;
-type ColIdx = usize;
+use super::{AnnotatedString, AnnotationType};
 
 #[derive(Default, Clone)]
 pub struct Line {
@@ -151,18 +148,16 @@ impl Line {
                 continue;
             } else if fragment_start == range.end {
                 // Truncate right if we've reached the end of the visible range
-                result.replace(fragment.start_byte_idx, self.string.len(), "");
+                result.truncate_right_from(fragment.start_byte_idx);
                 continue;
             }
 
             // Fragment ends at the start of the range: Remove the entire left side of the string (if not already at start of string)
             if fragment_end <= range.start {
-                result.replace(
-                    0,
+                result.truncate_left_until(
                     fragment
                         .start_byte_idx
                         .saturating_add(fragment.grapheme.len()),
-                    "",
                 );
                 break; //End processing since all remaining fragments will be invisible.
             } else if fragment_start < range.start && fragment_end > range.start {
@@ -193,7 +188,7 @@ impl Line {
     pub fn grapheme_count(&self) -> GraphemeIdx {
         self.fragments.len()
     }
-    pub fn width_until(&self, grapheme_idx: GraphemeIdx) -> Col {
+    pub fn width_until(&self, grapheme_idx: GraphemeIdx) -> ColIdx {
         self.fragments
             .iter()
             .take(grapheme_idx)
@@ -203,7 +198,7 @@ impl Line {
             })
             .sum()
     }
-    pub fn width(&self) -> Col {
+    pub fn width(&self) -> ColIdx {
         self.width_until(self.grapheme_count())
     }
     // Inserts a character into the line, or appends it at the end if at == grapheme_count + 1
@@ -310,22 +305,45 @@ impl Line {
             .map(|(_, grapheme_idx)| *grapheme_idx)
     }
     fn find_all(&self, query: &str, range: Range<ByteIdx>) -> Vec<(ByteIdx, GraphemeIdx)> {
-        let end_byte_idx = range.end;
+        let end_byte_idx = min(range.end, self.string.len());
         let start_byte_idx = range.start;
-
+        debug_assert!(start_byte_idx <= end_byte_idx);
+        debug_assert!(start_byte_idx <= self.string.len());
         self.string
             .get(start_byte_idx..end_byte_idx)
             .map_or_else(Vec::new, |substr| {
-                substr
-                    .match_indices(query) // find _potential_ matches within the substring
-                    .filter_map(|(relative_start_idx, _)| {
-                        let absolute_start_idx = relative_start_idx.saturating_add(start_byte_idx); //convert their relative indices to absolute indices
-
-                        self.byte_idx_to_grapheme_idx(absolute_start_idx)
-                            .map(|grapheme_idx| (absolute_start_idx, grapheme_idx))
+                let potential_matches: Vec<ByteIdx> = substr
+                    .match_indices(query)
+                    .map(|(relative_start_idx, _)| {
+                        relative_start_idx.saturating_add(start_byte_idx)
                     })
-                    .collect()
+                    .collect();
+                self.match_grapheme_clusters(&potential_matches, query)
             })
+    }
+    fn match_grapheme_clusters(
+        &self,
+        matches: &[ByteIdx],
+        query: &str,
+    ) -> Vec<(ByteIdx, GraphemeIdx)> {
+        let grapheme_count = query.graphemes(true).count();
+        matches
+            .iter()
+            .filter_map(|&start| {
+                self.byte_idx_to_grapheme_idx(start)
+                    .and_then(|grapheme_idx| {
+                        self.fragments
+                            .get(grapheme_idx..grapheme_idx.saturating_add(grapheme_count))
+                            .and_then(|fragments| {
+                                let substring = fragments
+                                    .iter()
+                                    .map(|fragment| fragment.grapheme.as_str())
+                                    .collect::<String>(); // combining the fragments in a single string.
+                                (substring == query).then_some((start, grapheme_idx))
+                            })
+                    })
+            })
+            .collect()
     }
 }
 

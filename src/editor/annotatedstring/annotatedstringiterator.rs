@@ -1,9 +1,10 @@
 use super::{AnnotatedString, AnnotatedStringPart};
+use crate::prelude::*;
 use std::cmp::min;
 
 pub struct AnnotatedStringIterator<'a> {
     pub annotated_string: &'a AnnotatedString,
-    pub current_idx: usize,
+    pub current_idx: ByteIdx,
 }
 
 impl<'a> Iterator for AnnotatedStringIterator<'a> {
