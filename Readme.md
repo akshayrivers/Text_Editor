@@ -1,3 +1,4 @@
+[![Build](https://github.com/akshayrivers/Text_Editorr/actions/workflows/rust.yml/badge.svg)](https://github.com/akshayrivers/Text_Editorr/actions/workflows/rust.yml)
 ### Following the https://www.flenker.blog/hecto/
 
 We are trying to build a text editor in RUST
