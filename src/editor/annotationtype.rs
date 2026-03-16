@@ -2,5 +2,12 @@
 pub enum AnnotationType {
     Match,
     SelectedMatch,
-    Digit,
+    Number,
+    Keyword,
+    Type,
+    KnownValue,
+    Char,
+    LifetimeSpecifier,
+    Comment,
+    String,
 }

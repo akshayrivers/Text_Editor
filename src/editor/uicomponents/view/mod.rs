@@ -31,11 +31,13 @@ pub struct View {
 
 impl View {
     pub fn get_status(&self) -> DocumentStatus {
+        let file_info = self.buffer.get_file_info();
         DocumentStatus {
-            file_name: format!("{}", self.buffer.get_file_info()),
+            file_name: format!("{file_info}"),
             total_lines: self.buffer.height(),
             current_line_idx: self.text_location.line_idx,
             is_modified: self.buffer.is_dirty(),
+            file_type: file_info.get_file_type(),
         }
     }
     pub const fn is_file_loaded(&self) -> bool {
@@ -73,10 +75,14 @@ impl View {
     }
 
     pub fn save(&mut self) -> Result<(), Error> {
-        self.buffer.save()
+        self.buffer.save()?;
+        self.mark_redraw(true);
+        Ok(())
     }
     pub fn save_as(&mut self, file_name: &str) -> Result<(), Error> {
-        self.buffer.save_as(file_name)
+        self.buffer.save_as(file_name)?;
+        self.mark_redraw(true);
+        Ok(())
     }
     fn insert_char(&mut self, character: char) {
         let old_len = self.buffer.grapheme_count(self.text_location.line_idx);
@@ -321,8 +327,12 @@ impl UIComponent for View {
             .as_ref()
             .and_then(|search_info| search_info.query.as_deref());
         let selected_match = query.is_some().then_some(self.text_location);
-        let mut highlighter = Highlighter::new(query, selected_match);
-        for current_row in 0..end_y {
+        let mut highlighter = Highlighter::new(
+            query,
+            selected_match,
+            self.buffer.get_file_info().get_file_type(),
+        );
+        for current_row in 0..end_y.saturating_add(scroll_top) {
             self.buffer.highlight(current_row, &mut highlighter); // the full document is highlighted
         }
         for current_row in origin_row..end_y {

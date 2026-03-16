@@ -18,6 +18,8 @@ use annotation::Annotation;
 use crossterm::event::{read, Event, KeyEvent, KeyEventKind};
 use documentstatus::DocumentStatus;
 use line::Line;
+mod filetype;
+use filetype::FileType;
 
 use terminal::Terminal;
 use uicomponents::{CommandBar, MessageBar, StatusBar, UIComponent, View};

@@ -43,57 +43,59 @@ impl AnnotatedString {
     }
 
     pub fn replace(&mut self, start_byte_idx: ByteIdx, end_byte_idx: ByteIdx, new_string: &str) {
-        debug_assert!(start_byte_idx <= end_byte_idx);
-        debug_assert!(start_byte_idx < self.string.len());
-        let end_byte_idx = min(end_byte_idx, self.string.len());
-        if start_byte_idx > end_byte_idx {
+        let end = min(end_byte_idx, self.string.len());
+        debug_assert!(start_byte_idx <= end);
+        debug_assert!(start_byte_idx <= self.string.len());
+        if start_byte_idx > end {
             return;
         }
         self.string
             .replace_range(start_byte_idx..end_byte_idx, new_string);
 
-        let replaced_range_len = end_byte_idx.saturating_sub(start_byte_idx); //this is the range we want to replace
-        let shortend = new_string.len() < replaced_range_len;
-        let len_difference = new_string.len().abs_diff(replaced_range_len); // this is how much longer or shorter the new range is.
+        let replaced_range_len = end_byte_idx.saturating_sub(start_byte_idx); // This is the range we want to replace.
+        let shortened = new_string.len() < replaced_range_len;
+        let len_difference = new_string.len().abs_diff(replaced_range_len); // This is how much longer or shorter the new range is.
+
         if len_difference == 0 {
-            //no adjustment of annotations needed in case the replacement didn't result in a change in length.
+            //No adjustment of annotations needed in case the replacement did not result in a change in length.
             return;
         }
 
         self.annotations.iter_mut().for_each(|annotation| {
             annotation.start_byte_idx = if annotation.start_byte_idx >= end_byte_idx {
-                // for annotations starting after the replaced range, we move from the start index by the diff in length
-                if shortend {
+                // For annotations starting after the replaced range, we move the start index by the difference in length.
+                if shortened {
                     annotation.start_byte_idx.saturating_sub(len_difference)
                 } else {
                     annotation.start_byte_idx.saturating_add(len_difference)
                 }
             } else if annotation.start_byte_idx >= start_byte_idx {
-                // For annotations starting within the replaced range, we move from the start index by the diff in len, constrained to the beginning or end of the replaced range.
-                if shortend {
+                // For annotations starting within the replaced range, we move the start index by the difference in length, constrained to the beginning or end of the replaced range.
+                if shortened {
                     max(
                         start_byte_idx,
                         annotation.start_byte_idx.saturating_sub(len_difference),
                     )
                 } else {
                     min(
-                        end_byte_idx,
+                        end,
                         annotation.start_byte_idx.saturating_add(len_difference),
                     )
                 }
             } else {
                 annotation.start_byte_idx
             };
-            annotation.end_byte_idx = if annotation.end_byte_idx >= end_byte_idx {
-                // for annotations ending after the replaced range, we move the end by the differnce in length.
-                if shortend {
+
+            annotation.end_byte_idx = if annotation.end_byte_idx >= end {
+                // For annotations ending after the replaced range, we move the end index by the difference in length.
+                if shortened {
                     annotation.end_byte_idx.saturating_sub(len_difference)
                 } else {
                     annotation.end_byte_idx.saturating_add(len_difference)
                 }
-            } else if annotation.end_byte_idx > start_byte_idx {
+            } else if annotation.end_byte_idx >= start_byte_idx {
                 // For annotations ending within the replaced range, we move the end index by the difference in length, constrained to the beginning or end of the replaced range.
-                if shortend {
+                if shortened {
                     max(
                         start_byte_idx,
                         annotation.end_byte_idx.saturating_sub(len_difference),
