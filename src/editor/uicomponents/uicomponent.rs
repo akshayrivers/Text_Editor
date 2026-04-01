@@ -23,13 +23,13 @@ pub trait UIComponent {
                 {
                     panic!("Could not render component: {err:?}");
                 }
+                #[cfg(not(debug_assertions))]
+                {
+                    let _ = err;
+                }
+            } else {
+                self.mark_redraw(false);
             }
-            #[cfg(not(debug_assertions))]
-            {
-                let _ = err;
-            }
-        } else {
-            self.mark_redraw(false);
         }
     }
     // Method to actually draw the component, must be implemented by each component
