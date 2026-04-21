@@ -344,3 +344,194 @@ impl Deref for Line {
         &self.string
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+}
+
+// Basic Construction tests
+#[test]
+fn line_from_basic_ascii() {
+    let line = Line::from("hello");
+
+    assert_eq!(&line.to_string(), "hello");
+    assert_eq!(line.grapheme_count(), 5);
+}
+
+#[test]
+fn line_from_empty() {
+    let line = Line::from("");
+
+    assert_eq!(&line.to_string(), "");
+    assert_eq!(line.grapheme_count(), 0);
+}
+
+// Grapheme Tests
+#[test]
+fn line_unicode_graphemes() {
+    let line = Line::from("नमस्ते");
+
+    assert!(line.grapheme_count() > 0);
+}
+
+#[test]
+fn line_emoji_graphemes() {
+    let line = Line::from("👨‍💻");
+
+    assert_eq!(line.grapheme_count(), 1);
+}
+
+#[test]
+fn line_combining_characters() {
+    let line = Line::from("é"); // e + accent
+
+    assert_eq!(line.grapheme_count(), 1);
+}
+
+//Grapheme width calculation
+#[test]
+fn width_ascii() {
+    let line = Line::from("abc");
+
+    assert_eq!(line.width(), 3);
+}
+
+#[test]
+fn width_fullwidth_characters() {
+    let line = Line::from("你好");
+
+    assert_eq!(line.width(), 4);
+}
+
+#[test]
+fn width_mixed_characters() {
+    let line = Line::from("a你");
+
+    assert_eq!(line.width(), 3);
+}
+
+//Insert Tests
+#[test]
+fn insert_char_middle() {
+    let mut line = Line::from("helo");
+
+    line.insert_char('l', 2);
+
+    assert_eq!(&line.to_string(), "hello");
+}
+
+#[test]
+fn insert_char_end() {
+    let mut line = Line::from("hell");
+
+    line.insert_char('o', 4);
+
+    assert_eq!(&line.to_string(), "hello");
+}
+
+#[test]
+fn append_char() {
+    let mut line = Line::from("hell");
+
+    line.append_char('o');
+
+    assert_eq!(&line.to_string(), "hello");
+}
+
+//Delete Tests
+#[test]
+fn delete_middle() {
+    let mut line = Line::from("hello");
+
+    line.delete(2);
+
+    assert_eq!(&line.to_string(), "helo");
+}
+
+#[test]
+fn delete_last() {
+    let mut line = Line::from("hello");
+
+    line.delete_last();
+
+    assert_eq!(&line.to_string(), "hell");
+}
+
+#[test]
+fn delete_unicode() {
+    let mut line = Line::from("a👨‍💻b");
+
+    line.delete(1);
+
+    assert_eq!(&line.to_string(), "ab");
+}
+// Split Tests
+#[test]
+fn split_middle() {
+    let mut line = Line::from("hello");
+
+    let second = line.split(2);
+
+    assert_eq!(&line.to_string(), "he");
+    assert_eq!(&second.to_string(), "llo");
+}
+
+#[test]
+fn split_end() {
+    let mut line = Line::from("hello");
+
+    let second = line.split(5);
+
+    assert_eq!(&line.to_string(), "hello");
+    assert_eq!(&second.to_string(), "");
+}
+
+// Append tests
+#[test]
+fn append_lines() {
+    let mut line1 = Line::from("hello");
+    let line2 = Line::from(" world");
+
+    line1.append(&line2);
+
+    assert_eq!(&line1.to_string(), "hello world");
+}
+
+// Search tests
+#[test]
+fn search_forward_basic() {
+    let line = Line::from("hello world");
+
+    let result = line.search_forward("world", 0);
+
+    assert_eq!(result, Some(6));
+}
+
+#[test]
+fn search_backward_basic() {
+    let line = Line::from("hello hello");
+
+    let result = line.search_backward("hello", line.grapheme_count());
+
+    assert_eq!(result, Some(6));
+}
+//Find all
+#[test]
+fn find_all_matches() {
+    let line = Line::from("hello hello hello");
+
+    let matches = line.find_all("hello", 0..line.len());
+
+    assert_eq!(matches.len(), 3);
+}
+
+// visible grapheme test
+#[test]
+fn visible_range_basic() {
+    let line = Line::from("hello");
+
+    let visible = line.get_visible_graphemes(0..3);
+
+    assert_eq!(visible, "hel");
+}
