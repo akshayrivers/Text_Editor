@@ -192,3 +192,230 @@ impl Buffer {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::Location;
+    use std::fs;
+    use std::path::Path;
+
+    fn loc(line: usize, col: usize) -> Location {
+        Location {
+            line_idx: line,
+            grapheme_idx: col,
+        }
+    }
+
+    #[test]
+    fn buffer_insert_char_basic() {
+        let mut buffer = Buffer::default();
+
+        buffer.insert_char('h', loc(0, 0));
+        buffer.insert_char('i', loc(0, 1));
+
+        assert_eq!(buffer.height(), 1);
+        assert_eq!(buffer.grapheme_count(0), 2);
+        assert!(buffer.is_dirty());
+    }
+
+    #[test]
+    fn buffer_insert_newline() {
+        let mut buffer = Buffer::default();
+
+        buffer.insert_char('h', loc(0, 0));
+        buffer.insert_char('i', loc(0, 1));
+
+        buffer.insert_newline(loc(0, 2));
+
+        assert_eq!(buffer.height(), 2);
+        assert!(buffer.is_dirty());
+    }
+
+    #[test]
+    fn buffer_insert_newline_middle() {
+        let mut buffer = Buffer::default();
+
+        buffer.insert_char('h', loc(0, 0));
+        buffer.insert_char('e', loc(0, 1));
+        buffer.insert_char('l', loc(0, 2));
+        buffer.insert_char('l', loc(0, 3));
+        buffer.insert_char('o', loc(0, 4));
+
+        buffer.insert_newline(loc(0, 2));
+
+        assert_eq!(buffer.height(), 2);
+    }
+
+    #[test]
+    fn buffer_delete_char() {
+        let mut buffer = Buffer::default();
+
+        buffer.insert_char('h', loc(0, 0));
+        buffer.insert_char('i', loc(0, 1));
+
+        buffer.delete(loc(0, 1));
+
+        assert_eq!(buffer.grapheme_count(0), 1);
+    }
+
+    #[test]
+    fn buffer_delete_merge_lines() {
+        let mut buffer = Buffer::default();
+
+        buffer.insert_char('h', loc(0, 0));
+        buffer.insert_newline(loc(0, 1));
+        buffer.insert_char('i', loc(1, 0));
+
+        buffer.delete(loc(0, 1));
+
+        assert_eq!(buffer.height(), 1);
+        assert_eq!(buffer.grapheme_count(0), 2);
+    }
+
+    #[test]
+    fn buffer_search_forward_same_line() {
+        let mut buffer = Buffer::default();
+
+        for (i, c) in "hello world".chars().enumerate() {
+            buffer.insert_char(c, loc(0, i));
+        }
+
+        let result = buffer.search_forward("world", loc(0, 0));
+
+        assert!(result.is_some());
+        let result = result.unwrap();
+
+        assert_eq!(result.line_idx, 0);
+        assert_eq!(result.grapheme_idx, 6);
+    }
+
+    #[test]
+    fn buffer_search_forward_multiline() {
+        let mut buffer = Buffer::default();
+
+        for (i, c) in "hello".chars().enumerate() {
+            buffer.insert_char(c, loc(0, i));
+        }
+
+        buffer.insert_newline(loc(0, 5));
+
+        for (i, c) in "world".chars().enumerate() {
+            buffer.insert_char(c, loc(1, i));
+        }
+
+        let result = buffer.search_forward("world", loc(0, 0));
+
+        assert!(result.is_some());
+        let result = result.unwrap();
+
+        assert_eq!(result.line_idx, 1);
+    }
+
+    #[test]
+    fn buffer_search_backward() {
+        let mut buffer = Buffer::default();
+
+        for (i, c) in "hello".chars().enumerate() {
+            buffer.insert_char(c, loc(0, i));
+        }
+
+        buffer.insert_newline(loc(0, 5));
+
+        for (i, c) in "hello".chars().enumerate() {
+            buffer.insert_char(c, loc(1, i));
+        }
+
+        let result = buffer.search_backward("hello", loc(1, 5));
+
+        assert!(result.is_some());
+        let result = result.unwrap();
+
+        assert_eq!(result.line_idx, 1);
+    }
+
+    #[test]
+    fn buffer_height() {
+        let mut buffer = Buffer::default();
+
+        buffer.insert_char('a', loc(0, 0));
+        buffer.insert_newline(loc(0, 1));
+        buffer.insert_char('b', loc(1, 0));
+
+        assert_eq!(buffer.height(), 2);
+    }
+
+    #[test]
+    fn buffer_is_empty() {
+        let buffer = Buffer::default();
+
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn buffer_dirty_flag() {
+        let mut buffer = Buffer::default();
+
+        assert!(!buffer.is_dirty());
+
+        buffer.insert_char('a', loc(0, 0));
+
+        assert!(buffer.is_dirty());
+    }
+
+    #[test]
+    fn buffer_save_and_load() {
+        let file = "test_buffer_save.txt";
+
+        let mut buffer = Buffer::default();
+
+        buffer.insert_char('h', loc(0, 0));
+        buffer.insert_char('i', loc(0, 1));
+
+        buffer.save_as(file).unwrap();
+
+        let loaded = Buffer::load(file).unwrap();
+
+        assert_eq!(loaded.height(), 1);
+        assert_eq!(loaded.grapheme_count(0), 2);
+
+        fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn buffer_is_file_loaded() {
+        let mut buffer = Buffer::default();
+
+        assert!(!buffer.is_file_loaded());
+
+        buffer.save_as("test_file.txt").unwrap();
+
+        assert!(buffer.is_file_loaded());
+
+        fs::remove_file("test_file.txt").unwrap();
+    }
+
+    #[test]
+    fn buffer_width_until() {
+        let mut buffer = Buffer::default();
+
+        buffer.insert_char('a', loc(0, 0));
+        buffer.insert_char('b', loc(0, 1));
+        buffer.insert_char('c', loc(0, 2));
+
+        let width = buffer.width_until(0, 2);
+
+        assert_eq!(width, 2);
+    }
+
+    #[test]
+    fn buffer_multiple_newlines() {
+        let mut buffer = Buffer::default();
+
+        buffer.insert_char('a', loc(0, 0));
+        buffer.insert_newline(loc(0, 1));
+        buffer.insert_newline(loc(1, 0));
+        buffer.insert_char('b', loc(2, 0));
+
+        assert_eq!(buffer.height(), 3);
+    }
+}

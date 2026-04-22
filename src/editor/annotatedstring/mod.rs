@@ -135,3 +135,119 @@ impl<'a> IntoIterator for &'a AnnotatedString {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn iterator_with_annotation() {
+        let mut s = AnnotatedString::from("hello world");
+
+        s.add_annotation(AnnotationType::Keyword, 0, 5);
+
+        let parts: Vec<_> = (&s).into_iter().collect();
+
+        assert_eq!(parts.len(), 2);
+
+        assert_eq!(parts[0].string, "hello");
+        assert!(parts[0].annotation_type.is_some());
+
+        assert_eq!(parts[1].string, " world");
+        assert!(parts[1].annotation_type.is_none());
+    }
+
+    #[test]
+    fn unicode_handling() {
+        let mut s = AnnotatedString::from("héllo");
+
+        s.add_annotation(AnnotationType::Keyword, 0, 3);
+
+        let parts: Vec<_> = (&s).into_iter().collect();
+
+        assert!(!parts.is_empty());
+    }
+
+    #[test]
+    fn overlapping_annotations() {
+        let mut s = AnnotatedString::from("hello world");
+
+        s.add_annotation(AnnotationType::Keyword, 0, 5);
+
+        s.add_annotation(AnnotationType::String, 3, 8);
+
+        let parts: Vec<_> = (&s).into_iter().collect();
+
+        assert!(!parts.is_empty());
+    }
+    #[test]
+    fn empty_annotation_removed() {
+        let mut s = AnnotatedString::from("hello");
+
+        s.add_annotation(AnnotationType::Keyword, 2, 2);
+
+        s.replace(0, 5, "hi");
+
+        assert!(s.annotations.is_empty());
+    }
+    #[test]
+    fn replace_entire_string() {
+        let mut s = AnnotatedString::from("hello world");
+
+        s.add_annotation(AnnotationType::Keyword, 0, 5);
+
+        s.replace(0, 11, "hi");
+
+        assert_eq!(s.string, "hi");
+        assert!(s.annotations.is_empty());
+    }
+    #[test]
+    fn replace_with_empty() {
+        let mut s = AnnotatedString::from("hello world");
+
+        s.replace(0, 5, "");
+
+        assert_eq!(s.string, " world");
+    }
+    #[test]
+    fn annotation_at_end() {
+        let mut s = AnnotatedString::from("hello world");
+
+        s.add_annotation(AnnotationType::Keyword, 6, 11);
+
+        let parts: Vec<_> = (&s).into_iter().collect();
+
+        assert_eq!(parts.len(), 2);
+    }
+    #[test]
+    fn adjacent_annotations() {
+        let mut s = AnnotatedString::from("abcdef");
+
+        s.add_annotation(AnnotationType::Keyword, 0, 3);
+
+        s.add_annotation(AnnotationType::String, 3, 6);
+
+        let parts: Vec<_> = (&s).into_iter().collect();
+
+        assert_eq!(parts.len(), 2);
+    }
+    #[test]
+    fn complex_unicode() {
+        let mut s = AnnotatedString::from("a🙂bé漢字");
+
+        s.add_annotation(AnnotationType::Keyword, 0, 4);
+
+        let parts: Vec<_> = (&s).into_iter().collect();
+
+        assert!(!parts.is_empty());
+    }
+    #[test]
+    fn editing_flow() {
+        let mut s = AnnotatedString::from("hello");
+
+        s.add_annotation(AnnotationType::Keyword, 0, 5);
+
+        s.replace(5, 5, " world");
+
+        assert_eq!(s.string, "hello world");
+    }
+}
