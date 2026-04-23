@@ -10,6 +10,8 @@ pub enum System {
     Quit,
     Dismiss,
     Search,
+    Undo,
+    Redo,
 }
 
 impl TryFrom<KeyEvent> for System {
@@ -24,6 +26,8 @@ impl TryFrom<KeyEvent> for System {
                 Char('q') => Ok(Self::Quit),
                 Char('s') => Ok(Self::Save),
                 Char('f') => Ok(Self::Search),
+                Char('z') => Ok(Self::Undo),
+                Char('r') => Ok(Self::Redo),
                 _ => Err(format!("Unsupported CONTROL+{code:?} combination")),
             }
         } else if modifiers == KeyModifiers::NONE && matches!(code, KeyCode::Esc) {

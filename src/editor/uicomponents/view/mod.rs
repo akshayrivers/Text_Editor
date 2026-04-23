@@ -18,6 +18,10 @@ use fileinfo::FileInfo;
 mod searchinfo;
 use searchinfo::SearchInfo;
 
+enum EditOperation {
+    Insert { at: Location, text: char },
+    Delete { at: Location, text: char },
+}
 #[derive(Default)]
 pub struct View {
     buffer: Buffer,
@@ -27,6 +31,8 @@ pub struct View {
     text_location: Location,
     scroll_offset: Position,
     search_info: Option<SearchInfo>,
+    undo_stack: Vec<EditOperation>,
+    redo_stack: Vec<EditOperation>,
 }
 
 impl View {
@@ -87,6 +93,11 @@ impl View {
     fn insert_char(&mut self, character: char) {
         let old_len = self.buffer.grapheme_count(self.text_location.line_idx);
         self.buffer.insert_char(character, self.text_location);
+        self.undo_stack.push(EditOperation::Insert {
+            at: self.text_location,
+            text: character,
+        });
+        self.redo_stack.clear();
         let new_len = self.buffer.grapheme_count(self.text_location.line_idx);
         let grapheme_delta = new_len.saturating_sub(old_len);
         if grapheme_delta > 0 {
@@ -107,7 +118,15 @@ impl View {
         }
     }
     fn delete(&mut self) {
-        self.buffer.delete(self.text_location);
+        let at = self.text_location;
+
+        if let Some(ch) = self.buffer.get_char_at(at) {
+            self.buffer.delete(at);
+
+            self.undo_stack.push(EditOperation::Delete { at, text: ch });
+            self.redo_stack.clear();
+        }
+
         self.mark_redraw(true);
     }
 
@@ -126,7 +145,54 @@ impl View {
         }
         format!("{:<1}{:^remaining_width$}", "~", welcome_message)
     }
+    // very simple undo redo
+    pub fn redo(&mut self) {
+        if let Some(op) = self.redo_stack.pop() {
+            self.apply_operation(&op);
 
+            self.undo_stack.push(op);
+
+            self.mark_redraw(true);
+        }
+    }
+    pub fn undo(&mut self) {
+        if let Some(op) = self.undo_stack.pop() {
+            let rev = Self::reverse(&op);
+
+            self.apply_operation(&rev);
+
+            self.redo_stack.push(op);
+
+            self.mark_redraw(true);
+        }
+    }
+    fn reverse(op: &EditOperation) -> EditOperation {
+        match op {
+            EditOperation::Insert { at, text } => EditOperation::Delete {
+                at: *at,
+                text: *text,
+            },
+            EditOperation::Delete { at, text } => EditOperation::Insert {
+                at: *at,
+                text: *text,
+            },
+        }
+    }
+    fn apply_operation(&mut self, op: &EditOperation) {
+        match op {
+            EditOperation::Insert { at, text } => {
+                self.buffer.insert_char(*text, *at);
+                self.text_location = Location {
+                    line_idx: at.line_idx,
+                    grapheme_idx: at.grapheme_idx + 1,
+                };
+            }
+            EditOperation::Delete { at, .. } => {
+                self.buffer.delete(*at);
+                self.text_location = *at;
+            }
+        }
+    }
     // SCROLLING
     fn scroll_vertically(&mut self, to: RowIdx) {
         let Size { height, .. } = self.size;

@@ -28,7 +28,7 @@ use self::command::{
     Command::{self, Edit, Move, System},
     Edit::InsertNewLine,
     Move::{Down, Left, Right, Up},
-    System::{Dismiss, Quit, Resize, Save, Search},
+    System::{Dismiss, Quit, Redo, Resize, Save, Search, Undo},
 };
 
 const QUIT_TIMES: u8 = 3;
@@ -188,6 +188,8 @@ impl Editor {
             System(Quit | Resize(_) | Dismiss) => {}
             System(Search) => self.set_prompt(PromptType::Search),
             System(Save) => self.handle_save_command(),
+            System(Redo) => self.handle_redo_command(),
+            System(Undo) => self.handle_undo_command(),
             Edit(edit_command) => self.view.handle_edit_command(edit_command),
 
             Move(move_command) => self.view.handle_move_command(move_command),
@@ -230,6 +232,13 @@ impl Editor {
         }
     }
     //endregion
+    // region : undo & redo
+    fn handle_redo_command(&mut self) {
+        self.view.redo();
+    }
+    fn handle_undo_command(&mut self) {
+        self.view.undo();
+    }
 
     // region : save command & prompt handling
 
@@ -243,7 +252,7 @@ impl Editor {
 
     fn process_command_during_save(&mut self, command: Command) {
         match command {
-            System(Quit | Resize(_) | Search | Save) | Move(_) => {} //already handled
+            System(Quit | Resize(_) | Search | Save | Undo | Redo) | Move(_) => {} //already handled
             System(Dismiss) => {
                 self.set_prompt(PromptType::None);
                 self.update_message("Save aborted");
@@ -290,7 +299,7 @@ impl Editor {
             }
             Move(Right | Down) => self.view.search_next(),
             Move(Up | Left) => self.view.search_prev(),
-            System(Quit | Resize(_) | Search | Save) | Move(_) => {} // Not applicable during save, Resize already handled at this stage
+            System(Quit | Resize(_) | Search | Save | Undo | Redo) | Move(_) => {} // Not applicable during save, Resize already handled at this stage
         }
     }
 

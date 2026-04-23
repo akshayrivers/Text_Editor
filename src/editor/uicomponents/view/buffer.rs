@@ -85,6 +85,9 @@ impl Buffer {
         }
         None
     }
+    pub fn get_char_at(&self, at: Location) -> Option<char> {
+        Some(' ')
+    }
     pub fn search_backward(&self, query: &str, from: Location) -> Option<Location> {
         if query.is_empty() {
             return None;
