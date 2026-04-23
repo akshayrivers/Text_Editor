@@ -98,6 +98,37 @@ impl From<AnnotationType> for Attribute {
                 }),
                 background: None,
             },
+            // Markdown / Text
+            AnnotationType::Heading => Self {
+                foreground: Some(Color::Cyan),
+                background: None,
+            },
+            AnnotationType::Emphasis => Self {
+                foreground: Some(Color::Magenta),
+                background: None,
+            },
+            AnnotationType::InlineCode => Self {
+                foreground: Some(Color::Yellow),
+                background: Some(Color::DarkGrey),
+            },
+            AnnotationType::CodeBlock => Self {
+                foreground: Some(Color::Yellow),
+                background: Some(Color::Black),
+            },
+            AnnotationType::Link => Self {
+                foreground: Some(Color::Blue),
+                background: None,
+            },
+            AnnotationType::ListItem => Self {
+                foreground: Some(Color::Green),
+                background: None,
+            },
+
+            // Fallback / neutral
+            AnnotationType::Identifier => Self {
+                foreground: None,
+                background: None,
+            },
         }
     }
 }

@@ -4,15 +4,19 @@ use crate::prelude::*;
 mod syntaxhighlighter;
 use searchresulthighlighter::SearchResultHighlighter;
 use syntaxhighlighter::SyntaxHighlighter;
+mod mdsyntaxhighlighter;
 mod rustsyntaxhighlighter;
 mod searchresulthighlighter;
+mod textsyntaxhighlighter;
+use mdsyntaxhighlighter::MarkDownSyntaxHighlighter;
 use rustsyntaxhighlighter::RustSyntaxHighlighter;
+use textsyntaxhighlighter::TextSyntaxHighlighter;
 
 fn create_syntax_highlighter(file_type: FileType) -> Option<Box<dyn SyntaxHighlighter>> {
     match file_type {
         FileType::Rust => Some(Box::<RustSyntaxHighlighter>::default()),
-        FileType::Text => None,
-        FileType::MarkDown => None,
+        FileType::Text => Some(Box::<TextSyntaxHighlighter>::default()),
+        FileType::MarkDown => Some(Box::<MarkDownSyntaxHighlighter>::default()),
     }
 }
 
