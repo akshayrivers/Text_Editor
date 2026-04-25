@@ -86,7 +86,7 @@ impl Buffer {
         None
     }
     pub fn get_char_at(&self, at: Location) -> Option<char> {
-        Some(' ')
+        self.lines.get(at.line_idx)?.get_char_at(at.grapheme_idx)
     }
     pub fn search_backward(&self, query: &str, from: Location) -> Option<Location> {
         if query.is_empty() {
@@ -200,7 +200,6 @@ mod tests {
     use super::*;
     use crate::prelude::Location;
     use std::fs;
-    use std::path::Path;
 
     fn loc(line: usize, col: usize) -> Location {
         Location {

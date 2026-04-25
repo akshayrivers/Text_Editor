@@ -168,7 +168,11 @@ impl Line {
 
         result
     }
-
+    pub fn get_char_at(&self, idx: GraphemeIdx) -> Option<char> {
+        self.fragments
+            .get(idx)
+            .and_then(|frag| frag.grapheme.chars().next())
+    }
     pub fn grapheme_count(&self) -> GraphemeIdx {
         self.fragments.len()
     }
