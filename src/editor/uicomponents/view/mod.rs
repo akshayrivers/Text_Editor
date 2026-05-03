@@ -5,6 +5,7 @@ use super::super::{
 use super::UIComponent;
 use crate::editor::RowIdx;
 use crate::prelude::*;
+use std::time::Instant;
 use std::{cmp::min, io::Error};
 mod buffer;
 use buffer::Buffer;
@@ -19,8 +20,25 @@ mod searchinfo;
 use searchinfo::SearchInfo;
 
 enum EditOperation {
-    Insert { at: Location, text: char },
-    Delete { at: Location, text: char },
+    InsertChar {
+        at: Location,
+        text: char,
+    },
+    DeleteChar {
+        at: Location,
+        text: char,
+    },
+    InsertNewLine {
+        at: Location,
+    },
+    DeleteNewLine {
+        line_idx: usize,
+        split_at_grapheme: usize,
+    },
+    InsertGroup {
+        start: Location,
+        chars: Vec<char>,
+    },
 }
 #[derive(Default)]
 pub struct View {
@@ -33,8 +51,11 @@ pub struct View {
     search_info: Option<SearchInfo>,
     undo_stack: Vec<EditOperation>,
     redo_stack: Vec<EditOperation>,
+    // timestamp of the last insert (helps us in grouping the steps)
+    last_insert_time: Option<Instant>,
 }
-
+/// How long a gap between keystrokes before we start a new undo group.
+const GROUP_TIMEOUT_MS: u128 = 800;
 impl View {
     pub fn get_status(&self) -> DocumentStatus {
         let file_info = self.buffer.get_file_info();
@@ -93,40 +114,122 @@ impl View {
     fn insert_char(&mut self, character: char) {
         let old_len = self.buffer.grapheme_count(self.text_location.line_idx);
         self.buffer.insert_char(character, self.text_location);
-        self.undo_stack.push(EditOperation::Insert {
+        self.redo_stack.clear();
+
+        let now = Instant::now();
+        let should_group = self
+            .last_insert_time
+            .map(|t| now.duration_since(t).as_millis() < GROUP_TIMEOUT_MS)
+            .unwrap_or(false);
+
+        if should_group {
+            // Try to merge into the last op on the undo stack
+            if let Some(EditOperation::InsertGroup { chars, .. }) = self.undo_stack.last_mut() {
+                chars.push(character);
+                self.last_insert_time = Some(now);
+                // Still need to move cursor
+                let new_len = self.buffer.grapheme_count(self.text_location.line_idx);
+                if new_len.saturating_sub(old_len) > 0 {
+                    self.handle_move_command(Move::Right);
+                }
+                self.mark_redraw(true);
+                return;
+            }
+            // Last op was InsertChar (single) — upgrade it to a group
+            if let Some(EditOperation::InsertChar { at, text }) = self.undo_stack.pop() {
+                self.undo_stack.push(EditOperation::InsertGroup {
+                    start: at,
+                    chars: vec![text, character],
+                });
+                self.last_insert_time = Some(now);
+                let new_len = self.buffer.grapheme_count(self.text_location.line_idx);
+                if new_len.saturating_sub(old_len) > 0 {
+                    self.handle_move_command(Move::Right);
+                }
+                self.mark_redraw(true);
+                return;
+            }
+        }
+
+        // No grouping: push a fresh InsertChar
+        self.undo_stack.push(EditOperation::InsertChar {
             at: self.text_location,
             text: character,
         });
-        self.redo_stack.clear();
+        self.last_insert_time = Some(now);
+
         let new_len = self.buffer.grapheme_count(self.text_location.line_idx);
-        let grapheme_delta = new_len.saturating_sub(old_len);
-        if grapheme_delta > 0 {
-            // we move right with scroll handling
+        if new_len.saturating_sub(old_len) > 0 {
             self.handle_move_command(Move::Right);
         }
         self.mark_redraw(true);
     }
     fn insert_newline(&mut self) {
+        self.last_insert_time = None; // break any open group
+        self.undo_stack.push(EditOperation::InsertNewLine {
+            at: self.text_location,
+        });
+        self.redo_stack.clear();
         self.buffer.insert_newline(self.text_location);
         self.handle_move_command(Move::Right);
         self.mark_redraw(true);
     }
     fn delete_backward(&mut self) {
-        if self.text_location.line_idx != 0 || self.text_location.grapheme_idx != 0 {
-            self.handle_move_command(Move::Left);
-            self.delete();
+        self.last_insert_time = None;
+        // Recording before moving, so we know the true deletion location
+        if self.text_location.line_idx == 0 && self.text_location.grapheme_idx == 0 {
+            return; // Nothing to do at start of document
         }
+
+        if self.text_location.grapheme_idx == 0 {
+            // Backspace at line start = merge this line onto previous
+            // The "newline" being deleted is at the end of line_idx - 1
+            let prev_line_idx = self.text_location.line_idx.saturating_sub(1);
+            let split_at = self.buffer.grapheme_count(prev_line_idx);
+            self.undo_stack.push(EditOperation::DeleteNewLine {
+                line_idx: prev_line_idx,
+                split_at_grapheme: split_at,
+            });
+            self.redo_stack.clear();
+            // Move left (to end of previous line), then delete the newline via buffer.delete
+            self.handle_move_command(Move::Left);
+            self.buffer.delete(self.text_location); // deletes end-of-line = merges lines
+        } else {
+            self.handle_move_command(Move::Left);
+            // Now at is the grapheme we want to delete
+            if let Some(ch) = self.buffer.get_char_at(self.text_location) {
+                self.undo_stack.push(EditOperation::DeleteChar {
+                    at: self.text_location,
+                    text: ch,
+                });
+                self.redo_stack.clear();
+                self.buffer.delete(self.text_location);
+            }
+        }
+        self.mark_redraw(true);
     }
     fn delete(&mut self) {
+        self.last_insert_time = None;
         let at = self.text_location;
+        let grapheme_count = self.buffer.grapheme_count(at.line_idx);
 
-        if let Some(ch) = self.buffer.get_char_at(at) {
-            self.buffer.delete(at);
-
-            self.undo_stack.push(EditOperation::Delete { at, text: ch });
+        if at.grapheme_idx >= grapheme_count {
+            // Delete at end-of-line = merge next line onto this one
+            if at.line_idx.saturating_add(1) < self.buffer.height() {
+                self.undo_stack.push(EditOperation::DeleteNewLine {
+                    line_idx: at.line_idx,
+                    split_at_grapheme: grapheme_count,
+                });
+                self.redo_stack.clear();
+                self.buffer.delete(at);
+            }
+            // else: at end of last line, nothing to do
+        } else if let Some(ch) = self.buffer.get_char_at(at) {
+            self.undo_stack
+                .push(EditOperation::DeleteChar { at, text: ch });
             self.redo_stack.clear();
+            self.buffer.delete(at);
         }
-
         self.mark_redraw(true);
     }
 
@@ -145,51 +248,120 @@ impl View {
         }
         format!("{:<1}{:^remaining_width$}", "~", welcome_message)
     }
-    // very simple undo redo
-    pub fn redo(&mut self) {
-        if let Some(op) = self.redo_stack.pop() {
-            self.apply_operation(&op);
-
-            self.undo_stack.push(op);
-
-            self.mark_redraw(true);
-        }
-    }
+    // hmm not so very simple undo redo anymore ig
     pub fn undo(&mut self) {
         if let Some(op) = self.undo_stack.pop() {
-            let rev = Self::reverse(&op);
-
-            self.apply_operation(&rev);
-
+            self.apply_undo(&op);
             self.redo_stack.push(op);
-
+            self.scroll_text_location_into_view();
             self.mark_redraw(true);
         }
     }
-    fn reverse(op: &EditOperation) -> EditOperation {
-        match op {
-            EditOperation::Insert { at, text } => EditOperation::Delete {
-                at: *at,
-                text: *text,
-            },
-            EditOperation::Delete { at, text } => EditOperation::Insert {
-                at: *at,
-                text: *text,
-            },
+
+    pub fn redo(&mut self) {
+        if let Some(op) = self.redo_stack.pop() {
+            self.apply_redo(&op);
+            self.undo_stack.push(op);
+            self.scroll_text_location_into_view();
+            self.mark_redraw(true);
         }
     }
-    fn apply_operation(&mut self, op: &EditOperation) {
+    fn apply_undo(&mut self, op: &EditOperation) {
         match op {
-            EditOperation::Insert { at, text } => {
+            EditOperation::InsertChar { at, .. } => {
+                // Undo an insert = delete the character that was inserted
+                self.buffer.delete(*at);
+                self.text_location = *at;
+            }
+            EditOperation::DeleteChar { at, text } => {
+                // Undo a delete = re-insert the character
+                self.buffer.insert_char(*text, *at);
+                self.text_location = *at;
+            }
+            EditOperation::InsertNewLine { at } => {
+                // Undo an Enter = merge the line that was split back together.
+                // After insert_newline at `at`, the cursor moved to {line_idx+1, grapheme_idx:0}.
+                // The split point is at `at.grapheme_idx` on line `at.line_idx`.
+                // To undo: delete the newline = buffer.delete at end of at.line_idx
+                let end_of_line = self.buffer.grapheme_count(at.line_idx);
+                self.buffer.delete(Location {
+                    line_idx: at.line_idx,
+                    grapheme_idx: end_of_line,
+                });
+                self.text_location = *at;
+            }
+            EditOperation::DeleteNewLine {
+                line_idx,
+                split_at_grapheme,
+            } => {
+                // Undo a newline deletion = re-split the merged line
+                self.buffer.insert_newline(Location {
+                    line_idx: *line_idx,
+                    grapheme_idx: *split_at_grapheme,
+                });
+                self.text_location = Location {
+                    line_idx: line_idx.saturating_add(1),
+                    grapheme_idx: 0,
+                };
+            }
+            EditOperation::InsertGroup { start, chars } => {
+                // Delete all chars in the group, working backwards from the last
+                // inserted position so byte indices stay valid.
+                // The chars were inserted left-to-right starting at `start`.
+                // After inserting N chars, the last char is at start.grapheme_idx + N - 1.
+                let end_grapheme = start.grapheme_idx.saturating_add(chars.len());
+                for grapheme_idx in (start.grapheme_idx..end_grapheme).rev() {
+                    self.buffer.delete(Location {
+                        line_idx: start.line_idx,
+                        grapheme_idx,
+                    });
+                }
+                self.text_location = *start;
+            }
+        }
+    }
+    fn apply_redo(&mut self, op: &EditOperation) {
+        match op {
+            EditOperation::InsertChar { at, text } => {
                 self.buffer.insert_char(*text, *at);
                 self.text_location = Location {
                     line_idx: at.line_idx,
-                    grapheme_idx: at.grapheme_idx + 1,
+                    grapheme_idx: at.grapheme_idx.saturating_add(1),
                 };
             }
-            EditOperation::Delete { at, .. } => {
+            EditOperation::DeleteChar { at, .. } => {
                 self.buffer.delete(*at);
                 self.text_location = *at;
+            }
+            EditOperation::InsertNewLine { at } => {
+                self.buffer.insert_newline(*at);
+                self.text_location = Location {
+                    line_idx: at.line_idx.saturating_add(1),
+                    grapheme_idx: 0,
+                };
+            }
+            EditOperation::DeleteNewLine {
+                line_idx,
+                split_at_grapheme,
+            } => {
+                // Redo the merge: delete the newline at end of line_idx
+                self.buffer.delete(Location {
+                    line_idx: *line_idx,
+                    grapheme_idx: *split_at_grapheme,
+                });
+                self.text_location = Location {
+                    line_idx: *line_idx,
+                    grapheme_idx: *split_at_grapheme,
+                };
+            }
+            EditOperation::InsertGroup { start, chars } => {
+                // Re-insert chars left-to-right
+                let mut current = *start;
+                for &ch in chars {
+                    self.buffer.insert_char(ch, current);
+                    current.grapheme_idx = current.grapheme_idx.saturating_add(1);
+                }
+                self.text_location = current;
             }
         }
     }
@@ -422,5 +594,526 @@ impl UIComponent for View {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::command::{Edit, Move};
+
+    // Helper: build a View with some text already loaded
+    fn view_with_text(text: &str) -> View {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+        for ch in text.chars() {
+            if ch == '\n' {
+                view.handle_edit_command(Edit::InsertNewLine);
+            } else {
+                view.handle_edit_command(Edit::Insert(ch));
+            }
+        }
+        // Clear undo/redo stacks so tests start clean
+        // (typing during setup shouldn't count as undoable history)
+        view.undo_stack.clear();
+        view.redo_stack.clear();
+        // Reset cursor to top-left
+        view.text_location = Location {
+            line_idx: 0,
+            grapheme_idx: 0,
+        };
+        view
+    }
+
+    // ── Basic insert/undo ────────────────────────────────────────────────────
+
+    #[test]
+    fn undo_single_insert() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        view.handle_edit_command(Edit::Insert('a'));
+        assert_eq!(view.buffer.grapheme_count(0), 1);
+
+        view.undo();
+        assert_eq!(view.buffer.grapheme_count(0), 0);
+    }
+
+    #[test]
+    fn redo_single_insert() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        view.handle_edit_command(Edit::Insert('a'));
+        view.undo();
+        assert_eq!(view.buffer.grapheme_count(0), 0);
+
+        view.redo();
+        assert_eq!(view.buffer.grapheme_count(0), 1);
+    }
+
+    #[test]
+    fn undo_multiple_inserts() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        for ch in "hello".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+        }
+        assert_eq!(view.buffer.grapheme_count(0), 5);
+
+        for _ in 0..5 {
+            view.undo();
+        }
+        assert_eq!(view.buffer.grapheme_count(0), 0);
+    }
+
+    #[test]
+    fn undo_then_redo_restores_text() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        for ch in "hi".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+        }
+        view.undo();
+        view.undo();
+        view.redo();
+        view.redo();
+
+        // Should be back to "hi"
+        assert_eq!(view.buffer.grapheme_count(0), 2);
+    }
+
+    // ── Newline undo/redo ────────────────────────────────────────────────────
+
+    #[test]
+    fn undo_newline_merges_lines() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        for ch in "hello".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+        }
+        view.handle_edit_command(Edit::InsertNewLine);
+        assert_eq!(view.buffer.height(), 2);
+
+        view.undo();
+        assert_eq!(view.buffer.height(), 1);
+        assert_eq!(view.buffer.grapheme_count(0), 5);
+    }
+
+    #[test]
+    fn redo_newline_splits_lines() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        for ch in "hello".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+        }
+        view.handle_edit_command(Edit::InsertNewLine);
+        view.undo();
+        assert_eq!(view.buffer.height(), 1);
+
+        view.redo();
+        assert_eq!(view.buffer.height(), 2);
+    }
+
+    #[test]
+    fn newline_in_middle_of_line_undo() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        for ch in "hello".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+        }
+        // Move cursor to middle
+        view.text_location = Location {
+            line_idx: 0,
+            grapheme_idx: 2,
+        };
+        view.handle_edit_command(Edit::InsertNewLine);
+
+        // Should be "he" on line 0, "llo" on line 1
+        assert_eq!(view.buffer.height(), 2);
+        assert_eq!(view.buffer.grapheme_count(0), 2);
+        assert_eq!(view.buffer.grapheme_count(1), 3);
+
+        view.undo();
+
+        assert_eq!(view.buffer.height(), 1);
+        assert_eq!(view.buffer.grapheme_count(0), 5);
+    }
+
+    // ── Delete undo/redo ─────────────────────────────────────────────────────
+
+    #[test]
+    fn undo_delete_restores_char() {
+        let mut view = view_with_text("hi");
+        view.handle_edit_command(Edit::Delete);
+        assert_eq!(view.buffer.grapheme_count(0), 1);
+
+        view.undo();
+        assert_eq!(view.buffer.grapheme_count(0), 2);
+    }
+
+    #[test]
+    fn undo_backspace_restores_char() {
+        let mut view = view_with_text("hi");
+        // Move cursor to end of line
+        view.text_location = Location {
+            line_idx: 0,
+            grapheme_idx: 2,
+        };
+        view.handle_edit_command(Edit::DeleteBackward);
+        assert_eq!(view.buffer.grapheme_count(0), 1);
+
+        view.undo();
+        assert_eq!(view.buffer.grapheme_count(0), 2);
+    }
+
+    #[test]
+    fn undo_backspace_at_line_start_restores_newline() {
+        let mut view = view_with_text("hello\nworld");
+        // Position at start of line 1
+        view.text_location = Location {
+            line_idx: 1,
+            grapheme_idx: 0,
+        };
+        assert_eq!(view.buffer.height(), 2);
+
+        view.handle_edit_command(Edit::DeleteBackward);
+        assert_eq!(view.buffer.height(), 1);
+
+        view.undo();
+        assert_eq!(view.buffer.height(), 2);
+        assert_eq!(view.buffer.grapheme_count(0), 5);
+        assert_eq!(view.buffer.grapheme_count(1), 5);
+    }
+
+    #[test]
+    fn undo_delete_at_line_end_restores_newline() {
+        let mut view = view_with_text("hello\nworld");
+        // Position at end of line 0
+        view.text_location = Location {
+            line_idx: 0,
+            grapheme_idx: 5,
+        };
+        assert_eq!(view.buffer.height(), 2);
+
+        view.handle_edit_command(Edit::Delete);
+        assert_eq!(view.buffer.height(), 1);
+
+        view.undo();
+        assert_eq!(view.buffer.height(), 2);
+    }
+
+    // ── Cursor position after undo/redo ──────────────────────────────────────
+
+    #[test]
+    fn cursor_position_restored_after_undo_insert() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        view.handle_edit_command(Edit::Insert('a'));
+        // Cursor should be at grapheme 1 after insert
+        assert_eq!(view.text_location.grapheme_idx, 1);
+
+        view.undo();
+        // Cursor should go back to where the insert happened
+        assert_eq!(view.text_location.grapheme_idx, 0);
+    }
+
+    #[test]
+    fn cursor_position_restored_after_redo_insert() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        view.handle_edit_command(Edit::Insert('a'));
+        view.undo();
+        view.redo();
+
+        assert_eq!(view.text_location.grapheme_idx, 1);
+    }
+
+    #[test]
+    fn cursor_on_correct_line_after_undo_newline() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        for ch in "hello".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+        }
+        view.handle_edit_command(Edit::InsertNewLine);
+        assert_eq!(view.text_location.line_idx, 1);
+
+        view.undo();
+        assert_eq!(view.text_location.line_idx, 0);
+    }
+
+    // ── Redo stack cleared on new edit ───────────────────────────────────────
+
+    #[test]
+    fn new_edit_clears_redo_stack() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        view.handle_edit_command(Edit::Insert('a'));
+        view.undo();
+        assert!(!view.redo_stack.is_empty());
+
+        // New edit should wipe redo
+        view.handle_edit_command(Edit::Insert('b'));
+        assert!(view.redo_stack.is_empty());
+    }
+
+    // ── Edge cases ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn undo_on_empty_stack_does_nothing() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        // Should not panic
+        view.undo();
+        assert_eq!(view.buffer.height(), 0);
+    }
+
+    #[test]
+    fn redo_on_empty_stack_does_nothing() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        view.redo();
+        assert_eq!(view.buffer.height(), 0);
+    }
+
+    #[test]
+    fn backspace_at_document_start_does_nothing() {
+        let mut view = view_with_text("hi");
+        view.text_location = Location {
+            line_idx: 0,
+            grapheme_idx: 0,
+        };
+
+        view.handle_edit_command(Edit::DeleteBackward);
+
+        // Nothing changed, nothing on undo stack
+        assert_eq!(view.buffer.grapheme_count(0), 2);
+        assert!(view.undo_stack.is_empty());
+    }
+
+    #[test]
+    fn delete_at_document_end_does_nothing() {
+        let mut view = view_with_text("hi");
+        let last_line = view.buffer.height().saturating_sub(1);
+        let end_grapheme = view.buffer.grapheme_count(last_line);
+        view.text_location = Location {
+            line_idx: last_line,
+            grapheme_idx: end_grapheme,
+        };
+
+        view.handle_edit_command(Edit::Delete);
+
+        assert_eq!(view.buffer.grapheme_count(0), 2);
+        assert!(view.undo_stack.is_empty());
+    }
+
+    // ── Unicode / grapheme correctness ───────────────────────────────────────
+
+    #[test]
+    fn undo_insert_unicode_char() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        view.handle_edit_command(Edit::Insert('ü'));
+        assert_eq!(view.buffer.grapheme_count(0), 1);
+
+        view.undo();
+        assert_eq!(view.buffer.grapheme_count(0), 0);
+    }
+
+    // ── Word-granularity grouping ─────────────────────────────────────────────
+
+    #[test]
+    fn rapid_inserts_form_a_group() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        // Simulate typing "hello" with no delay — all within GROUP_TIMEOUT_MS
+        for ch in "hello".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+            // Force the timestamp to be recent so grouping triggers
+            view.last_insert_time = Some(std::time::Instant::now());
+        }
+
+        // Should be ONE op on the undo stack (the group), not five
+        assert_eq!(view.undo_stack.len(), 1);
+        assert!(matches!(
+            view.undo_stack.last(),
+            Some(EditOperation::InsertGroup { .. })
+        ));
+    }
+
+    #[test]
+    fn undo_group_removes_all_chars_at_once() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        for ch in "hello".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+            view.last_insert_time = Some(std::time::Instant::now());
+        }
+        assert_eq!(view.buffer.grapheme_count(0), 5);
+
+        view.undo();
+
+        // All 5 chars gone in one undo
+        assert_eq!(view.buffer.grapheme_count(0), 0);
+        assert!(view.undo_stack.is_empty());
+    }
+
+    #[test]
+    fn redo_group_reinserts_all_chars() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        for ch in "hello".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+            view.last_insert_time = Some(std::time::Instant::now());
+        }
+        view.undo();
+        assert_eq!(view.buffer.grapheme_count(0), 0);
+
+        view.redo();
+        assert_eq!(view.buffer.grapheme_count(0), 5);
+    }
+
+    #[test]
+    fn multiple_undos_and_redos_stay_consistent() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        // Type "abc" with forced grouping — they merge into ONE InsertGroup
+        for ch in "abc".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+            view.last_insert_time = Some(std::time::Instant::now());
+        }
+        // One undo removes the whole group ("abc")
+        assert_eq!(view.buffer.grapheme_count(0), 3);
+        view.undo();
+        assert_eq!(view.buffer.grapheme_count(0), 0);
+
+        // One redo restores the whole group
+        view.redo();
+        assert_eq!(view.buffer.grapheme_count(0), 3);
+    }
+
+    #[test]
+    fn delete_between_inserts_breaks_group() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        // Type "hel" — forms InsertGroup("hel"), cursor at grapheme 3
+        for ch in "hel".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+            view.last_insert_time = Some(std::time::Instant::now());
+        }
+
+        // Backspace (DeleteBackward) at position 3 deletes 'l', breaks the group
+        // We use DeleteBackward here because Delete at end-of-line-with-no-next-line is a no-op
+        view.handle_edit_command(Edit::DeleteBackward);
+        // "he" remains, stack: [InsertGroup("hel"), DeleteChar('l')]
+
+        // Type "lo" — forms a new group, cursor advances
+        for ch in "lo".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+            view.last_insert_time = Some(std::time::Instant::now());
+        }
+        // "helo" in buffer, stack: [InsertGroup("hel"), DeleteChar('l'), InsertGroup("lo")]
+
+        assert_eq!(view.undo_stack.len(), 3);
+    }
+
+    #[test]
+    fn cursor_at_group_start_after_undo() {
+        let mut view = View::default();
+        view.set_size(Size {
+            height: 24,
+            width: 80,
+        });
+
+        // Start cursor at grapheme 3 (simulate typing mid-document)
+        view.text_location = Location {
+            line_idx: 0,
+            grapheme_idx: 0,
+        };
+        for ch in "abc".chars() {
+            view.handle_edit_command(Edit::Insert(ch));
+            view.last_insert_time = Some(std::time::Instant::now());
+        }
+        view.undo();
+
+        assert_eq!(view.text_location.grapheme_idx, 0);
     }
 }
