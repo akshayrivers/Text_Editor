@@ -946,6 +946,303 @@ This architecture provides:
 
 ### Undo / Redo
 
+First I went along with the simple model of using 2 stacks one for undo and one for redo and then inserting in commands and therir relevent data.
+we pop out of the stack and push into the other stack
+|
+\/
+reverse the command
+|
+\/
+Apply the reversed operation
+
+```rust
+    // very simple undo redo
+    pub fn redo(&mut self) {
+        if let Some(op) = self.redo_stack.pop() {
+            self.apply_operation(&op);
+
+            self.undo_stack.push(op);
+
+            self.mark_redraw(true);
+        }
+    }
+    pub fn undo(&mut self) {
+        if let Some(op) = self.undo_stack.pop() {
+            let rev = Self::reverse(&op);
+
+            self.apply_operation(&rev);
+
+            self.redo_stack.push(op);
+
+            self.mark_redraw(true);
+        }
+    }
+    fn reverse(op: &EditOperation) -> EditOperation {
+        match op {
+            EditOperation::Insert { at, text } => EditOperation::Delete {
+                at: *at,
+                text: *text,
+            },
+            EditOperation::Delete { at, text } => EditOperation::Insert {
+                at: *at,
+                text: *text,
+            },
+        }
+    }
+    fn apply_operation(&mut self, op: &EditOperation) {
+        match op {
+            EditOperation::Insert { at, text } => {
+                self.buffer.insert_char(*text, *at);
+                self.text_location = Location {
+                    line_idx: at.line_idx,
+                    grapheme_idx: at.grapheme_idx + 1,
+                };
+            }
+            EditOperation::Delete { at, .. } => {
+                self.buffer.delete(*at);
+                self.text_location = *at;
+            }
+        }
+    }
+```
+
+This model only stores a single char. It had no concept of structues, so the moment one presses Enter or Backspace at a line boundary - we are merging or splitting two lines. The reverse() fxn cannot handle that beacuse there is nothing into. It would in undesired results and may even corrupt the buffer.
+
+So, to handle this correctly I intoduced the functionality to handle InserNewLine and DeleteNewLine
+
+```rust
+enum EditOperation {
+    // NOTE: text is char (single Unicode scalar value) not a grapheme cluster.
+    // This is safe for keyboard input since the OS composes grapheme clusters
+    // before delivery. If paste support is added, this must change to String.
+    InsertChar {
+        at: Location,
+        text: char,
+    },
+    DeleteChar {
+        at: Location,
+        text: char,
+    },
+    InsertNewLine {
+        at: Location,
+        grapheme_count_at_split: usize,
+    },
+    DeleteNewLine {
+        line_idx: usize,
+        split_at_grapheme: usize,
+    },
+    InsertGroup {
+        start: Location,
+        chars: Vec<char>,
+    },
+}
+```
+
+delete_backward() fxn was also fixed to record the op before moving the cursor so the stored location is always the true deletion point.Also I replaced apply_operation() + reverse() pair with apply_undo + apply_redo because cursor placement logic differs between undo and redo even for the same operation type:
+
+```rust
+    // hmm not so very simple undo redo anymore ig
+    pub fn undo(&mut self) {
+        if let Some(op) = self.undo_stack.pop() {
+            self.apply_undo(&op);
+            self.redo_stack.push(op);
+            self.scroll_text_location_into_view();
+            self.mark_redraw(true);
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(op) = self.redo_stack.pop() {
+            self.apply_redo(&op);
+            self.undo_stack.push(op);
+            self.scroll_text_location_into_view();
+            self.mark_redraw(true);
+        }
+    }
+    fn apply_undo(&mut self, op: &EditOperation) {
+        match op {
+            EditOperation::InsertChar { at, .. } => {
+                // Undo an insert = delete the character that was inserted
+                self.buffer.delete(*at);
+                self.text_location = *at;
+            }
+            EditOperation::DeleteChar { at, text } => {
+                // Undo a delete = re-insert the character
+                self.buffer.insert_char(*text, *at);
+                self.text_location = *at;
+            }
+            EditOperation::InsertNewLine {
+                at,
+                grapheme_count_at_split,
+            } => {
+                // Undo an Enter = merge the line that was split back together.
+                // After insert_newline at `at`, the cursor moved to {line_idx+1, grapheme_idx:0}.
+                // The split point is at `at.grapheme_idx` on line `at.line_idx`.
+                // To undo: delete the newline = buffer.delete at end of at.line_idx
+                self.buffer.delete(Location {
+                    line_idx: at.line_idx,
+                    grapheme_idx: *grapheme_count_at_split,
+                });
+                self.text_location = *at;
+            }
+            EditOperation::DeleteNewLine {
+                line_idx,
+                split_at_grapheme,
+            } => {
+                // Undo a newline deletion = re-split the merged line
+                self.buffer.insert_newline(Location {
+                    line_idx: *line_idx,
+                    grapheme_idx: *split_at_grapheme,
+                });
+                self.text_location = Location {
+                    line_idx: line_idx.saturating_add(1),
+                    grapheme_idx: 0,
+                };
+            }
+            EditOperation::InsertGroup { start, chars } => {
+                // Delete all chars in the group, working backwards from the last
+                // inserted position so byte indices stay valid.
+                // The chars were inserted left-to-right starting at `start`.
+                // After inserting N chars, the last char is at start.grapheme_idx + N - 1.
+                let end_grapheme = start.grapheme_idx.saturating_add(chars.len());
+                for grapheme_idx in (start.grapheme_idx..end_grapheme).rev() {
+                    self.buffer.delete(Location {
+                        line_idx: start.line_idx,
+                        grapheme_idx,
+                    });
+                }
+                self.text_location = *start;
+            }
+        }
+    }
+    fn apply_redo(&mut self, op: &EditOperation) {
+        match op {
+            EditOperation::InsertChar { at, text } => {
+                self.buffer.insert_char(*text, *at);
+                self.text_location = Location {
+                    line_idx: at.line_idx,
+                    grapheme_idx: at.grapheme_idx.saturating_add(1),
+                };
+            }
+            EditOperation::DeleteChar { at, .. } => {
+                self.buffer.delete(*at);
+                self.text_location = *at;
+            }
+            EditOperation::InsertNewLine { at, .. } => {
+                self.buffer.insert_newline(*at);
+                self.text_location = Location {
+                    line_idx: at.line_idx.saturating_add(1),
+                    grapheme_idx: 0,
+                };
+            }
+            EditOperation::DeleteNewLine {
+                line_idx,
+                split_at_grapheme,
+            } => {
+                // Redo the merge: delete the newline at end of line_idx
+                self.buffer.delete(Location {
+                    line_idx: *line_idx,
+                    grapheme_idx: *split_at_grapheme,
+                });
+                self.text_location = Location {
+                    line_idx: *line_idx,
+                    grapheme_idx: *split_at_grapheme,
+                };
+            }
+            EditOperation::InsertGroup { start, chars } => {
+                // Re-insert chars left-to-right
+                let mut current = *start;
+                for &ch in chars {
+                    self.buffer.insert_char(ch, current);
+                    current.grapheme_idx = current.grapheme_idx.saturating_add(1);
+                }
+                self.text_location = current;
+            }
+        }
+    }
+```
+
+Now let me address what this InsertGroup is:
+So ultimately in modern editors and text viewers the undo and redo functions also support grouping,like if I type a word very quickly and then I do undo, the whole word is gone. Now it can also be acheived through char by char iteration but, I decided to build support for it through
+
+```rust
+enum EditOperation {
+    // ... previous variants
+    InsertGroup {
+        start: Location,  // location of the first char in the group
+        chars: Vec<char>, // all chars inserted, in order
+    },
+}
+
+const GROUP_TIMEOUT_MS: u128 = 800;
+// I have kept it 800 beacuse it was the nice spot for me
+```
+
+When a new InsertChar arrives, three cases:
+
+- No recent insert or timeout exceeded → push a fresh InsertChar
+- Last op is InsertChar and within timeout → upgrade both into an InsertGroup
+- Last op is already an InsertGroup and within timeout → append to it
+
+Typing "hello" within 800ms:
+
+h pressed → InsertChar { 'h' }
+e pressed → timeout ok, last is InsertChar → upgrade to InsertGroup { "he" }
+l pressed → timeout ok, last is InsertGroup → append → InsertGroup { "hel" }
+l pressed → InsertGroup { "hell" }
+o pressed → InsertGroup { "hello" }
+
+One undo removes all 5 characters at once.
+Cursor returns to where 'h' was inserted.
+Any non-insert operation (Delete, Backspace, Enter) sets last_insert_time = None, which breaks the current group. Typing after a delete starts a fresh group.
+Undoing a group deletes chars right-to-left so byte indices stay valid:
+
+```rust
+
+EditOperation::InsertGroup { start, chars } => {
+    let end_grapheme = start.grapheme_idx.saturating_add(chars.len());
+    for grapheme_idx in (start.grapheme_idx..end_grapheme).rev() {
+    self.buffer.delete(Location {
+        line_idx: start.line_idx,
+        grapheme_idx,
+        });
+    }
+    self.text_location = \*start;
+}
+```
+
+Redoing a group re-inserts left-to-right:
+
+```rust
+EditOperation::InsertGroup { start, chars } => {
+    let mut current = *start;
+    for &ch in chars {
+        self.buffer.insert_char(ch, current);
+        current.grapheme_idx = current.grapheme_idx.saturating_add(1);
+    }
+    self.text_location = current;
+}
+```
+
+I have also written extensive unit tests to check this functionality:
+
+- Single insert undo/redo
+- Multiple inserts undo char by char
+- Newline undo merges lines correctly
+- Newline undo in the middle of a line restores both halves
+- Backspace at line start restores the newline
+- Delete at line end restores the newline
+- Cursor lands at the correct location after every operation
+- New edit clears the redo stack
+- Undo/redo on empty stacks does nothing (no panic)
+- Backspace at document start does nothing and pushes nothing to the stack
+- Delete at document end does nothing and pushes nothing to the stack
+- Unicode characters undo correctly
+- Rapid inserts form a single group
+- One undo removes the entire group
+- Delete between inserts breaks the group into separate undo steps
+- Cursor returns to group start position after undoing a group
+
 ### Copy / Paste
 
 ### Logging

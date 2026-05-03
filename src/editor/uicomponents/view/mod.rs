@@ -20,6 +20,9 @@ mod searchinfo;
 use searchinfo::SearchInfo;
 
 enum EditOperation {
+    // NOTE: text is char (single Unicode scalar value) not a grapheme cluster.
+    // This is safe for keyboard input since the OS composes grapheme clusters
+    // before delivery. If paste support is added, this must change to String.
     InsertChar {
         at: Location,
         text: char,
@@ -30,6 +33,7 @@ enum EditOperation {
     },
     InsertNewLine {
         at: Location,
+        grapheme_count_at_split: usize,
     },
     DeleteNewLine {
         line_idx: usize,
@@ -53,6 +57,9 @@ pub struct View {
     redo_stack: Vec<EditOperation>,
     // timestamp of the last insert (helps us in grouping the steps)
     last_insert_time: Option<Instant>,
+    // tracks where the cursor was after the last insert
+    // used alongside last_insert_time to detect non-contiguous typing
+    last_insert_location: Option<Location>,
 }
 /// How long a gap between keystrokes before we start a new undo group.
 const GROUP_TIMEOUT_MS: u128 = 800;
@@ -120,7 +127,14 @@ impl View {
         let should_group = self
             .last_insert_time
             .map(|t| now.duration_since(t).as_millis() < GROUP_TIMEOUT_MS)
-            .unwrap_or(false);
+            .unwrap_or(false)
+            && self
+                .last_insert_location
+                .map(|loc| {
+                    loc.line_idx == self.text_location.line_idx
+                        && loc.grapheme_idx == self.text_location.grapheme_idx
+                })
+                .unwrap_or(false);
 
         if should_group {
             // Try to merge into the last op on the undo stack
@@ -165,9 +179,12 @@ impl View {
         self.mark_redraw(true);
     }
     fn insert_newline(&mut self) {
-        self.last_insert_time = None; // break any open group
+        self.last_insert_time = None;
+        self.last_insert_location = None;
+        let grapheme_count_at_split = self.buffer.grapheme_count(self.text_location.line_idx);
         self.undo_stack.push(EditOperation::InsertNewLine {
             at: self.text_location,
+            grapheme_count_at_split,
         });
         self.redo_stack.clear();
         self.buffer.insert_newline(self.text_location);
@@ -176,6 +193,7 @@ impl View {
     }
     fn delete_backward(&mut self) {
         self.last_insert_time = None;
+        self.last_insert_location = None;
         // Recording before moving, so we know the true deletion location
         if self.text_location.line_idx == 0 && self.text_location.grapheme_idx == 0 {
             return; // Nothing to do at start of document
@@ -210,6 +228,7 @@ impl View {
     }
     fn delete(&mut self) {
         self.last_insert_time = None;
+        self.last_insert_location = None;
         let at = self.text_location;
         let grapheme_count = self.buffer.grapheme_count(at.line_idx);
 
@@ -278,15 +297,17 @@ impl View {
                 self.buffer.insert_char(*text, *at);
                 self.text_location = *at;
             }
-            EditOperation::InsertNewLine { at } => {
+            EditOperation::InsertNewLine {
+                at,
+                grapheme_count_at_split,
+            } => {
                 // Undo an Enter = merge the line that was split back together.
                 // After insert_newline at `at`, the cursor moved to {line_idx+1, grapheme_idx:0}.
                 // The split point is at `at.grapheme_idx` on line `at.line_idx`.
                 // To undo: delete the newline = buffer.delete at end of at.line_idx
-                let end_of_line = self.buffer.grapheme_count(at.line_idx);
                 self.buffer.delete(Location {
                     line_idx: at.line_idx,
-                    grapheme_idx: end_of_line,
+                    grapheme_idx: *grapheme_count_at_split,
                 });
                 self.text_location = *at;
             }
@@ -333,7 +354,7 @@ impl View {
                 self.buffer.delete(*at);
                 self.text_location = *at;
             }
-            EditOperation::InsertNewLine { at } => {
+            EditOperation::InsertNewLine { at, .. } => {
                 self.buffer.insert_newline(*at);
                 self.text_location = Location {
                     line_idx: at.line_idx.saturating_add(1),
@@ -600,7 +621,7 @@ impl UIComponent for View {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::command::{Edit, Move};
+    use crate::editor::command::Edit;
 
     // Helper: build a View with some text already loaded
     fn view_with_text(text: &str) -> View {
@@ -993,6 +1014,7 @@ mod tests {
             view.handle_edit_command(Edit::Insert(ch));
             // Force the timestamp to be recent so grouping triggers
             view.last_insert_time = Some(std::time::Instant::now());
+            view.last_insert_location = Some(view.text_location);
         }
 
         // Should be ONE op on the undo stack (the group), not five
@@ -1014,6 +1036,7 @@ mod tests {
         for ch in "hello".chars() {
             view.handle_edit_command(Edit::Insert(ch));
             view.last_insert_time = Some(std::time::Instant::now());
+            view.last_insert_location = Some(view.text_location);
         }
         assert_eq!(view.buffer.grapheme_count(0), 5);
 
@@ -1035,6 +1058,7 @@ mod tests {
         for ch in "hello".chars() {
             view.handle_edit_command(Edit::Insert(ch));
             view.last_insert_time = Some(std::time::Instant::now());
+            view.last_insert_location = Some(view.text_location);
         }
         view.undo();
         assert_eq!(view.buffer.grapheme_count(0), 0);
@@ -1055,6 +1079,7 @@ mod tests {
         for ch in "abc".chars() {
             view.handle_edit_command(Edit::Insert(ch));
             view.last_insert_time = Some(std::time::Instant::now());
+            view.last_insert_location = Some(view.text_location);
         }
         // One undo removes the whole group ("abc")
         assert_eq!(view.buffer.grapheme_count(0), 3);
@@ -1078,6 +1103,7 @@ mod tests {
         for ch in "hel".chars() {
             view.handle_edit_command(Edit::Insert(ch));
             view.last_insert_time = Some(std::time::Instant::now());
+            view.last_insert_location = Some(view.text_location);
         }
 
         // Backspace (DeleteBackward) at position 3 deletes 'l', breaks the group
@@ -1089,6 +1115,7 @@ mod tests {
         for ch in "lo".chars() {
             view.handle_edit_command(Edit::Insert(ch));
             view.last_insert_time = Some(std::time::Instant::now());
+            view.last_insert_location = Some(view.text_location);
         }
         // "helo" in buffer, stack: [InsertGroup("hel"), DeleteChar('l'), InsertGroup("lo")]
 
@@ -1111,6 +1138,7 @@ mod tests {
         for ch in "abc".chars() {
             view.handle_edit_command(Edit::Insert(ch));
             view.last_insert_time = Some(std::time::Instant::now());
+            view.last_insert_location = Some(view.text_location);
         }
         view.undo();
 
