@@ -18,6 +18,9 @@ Initially it had been a faithful implementation of the text editor built in the 
 ### Editor Features & Extensions
 
 6. [Phase VI: Miscellaneous Features](#phase-vi-miscellaneous-features)
+   - 6.1 Undo/Redo
+   - 6.2 Copy/Paste
+   - 6.3 Unit tests and Logging
 7. [Phase VII: Plugin System](#phase-vii-plugin-system)
 
 ### Future Work
@@ -218,33 +221,6 @@ Line 53   │
 
 so we went with visualizing a canvas of infinite rows and columns from which we cna choose the size of the terminal to show them correctly
 Ultimately we have used various snapping and centering functions to keep the content correct.
-
-#### Viewport Snapping
-
-Three snapping strategies:
-
-1. **Top Snap:** Keep cursor at top of screen
-
-```rust
-if cursor_y < offset_y {
-    offset_y = cursor_y;  // Snap to top
-}
-```
-
-2. **Bottom Snap:** Keep cursor at bottom of screen
-
-```rust
-if cursor_y >= offset_y + screen_height {
-    offset_y = cursor_y - screen_height + 1;
-}
-```
-
-3. **Center Snap:** Keep cursor centered (better UX)
-
-```rust
-let desired_offset = cursor_y.saturating_sub(screen_height / 2);
-offset_y = desired_offset;
-```
 
 ### Grapheme Support: Unicode Complexity
 
@@ -942,8 +918,6 @@ This architecture provides:
 
 ## Phase VI: Miscellaneous Features
 
-### Unit Tests
-
 ### Undo / Redo
 
 First I went along with the simple model of using 2 stacks one for undo and one for redo and then inserting in commands and therir relevent data.
@@ -1245,7 +1219,7 @@ I have also written extensive unit tests to check this functionality:
 
 ### Copy / Paste
 
-### Logging
+### Unit Tests &Logging
 
 ---
 

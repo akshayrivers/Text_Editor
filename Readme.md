@@ -5,6 +5,10 @@
 Initially it had been a faithful implementation of the text editor built in the [Hecto tutorial](https://www.flenker.blog/hecto/). But I have enhanced and changed it into something which I can use as a writer and also it is also to challenge myself as a programmer.
 For detailed notes please refer to /notes.md
 
+## Demo
+
+![demo](./demo.gif)
+
 ## Overview & Design Philosophy
 
 Instead of jumping directly into features, the editor was built in layers:
@@ -28,6 +32,32 @@ Some guiding principles during development:
 - Design for extensibility (plugins later)
 
 This allowed the editor to evolve organically while keeping complexity manageable.
+
+## Quick Start
+
+### Requirements
+
+- Rust (stable)
+- Terminal with UTF-8 support
+
+### Run
+
+```bash
+git clone https://github.com/akshayrivers/Text_Editor.git
+cd Text_Editor
+cargo run
+```
+
+## Keybindings
+
+| Key        | Action      |
+| ---------- | ----------- |
+| Ctrl-S     | Save file   |
+| Ctrl-Q     | Quit        |
+| Ctrl-F     | Search      |
+| Arrow Keys | Move cursor |
+| Ctrl-Z.    | Undo        |
+| Ctrl-R.    | Redo        |
 
 ### Core Components
 
