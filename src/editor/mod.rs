@@ -20,7 +20,8 @@ use documentstatus::DocumentStatus;
 use line::Line;
 mod filetype;
 use filetype::FileType;
-
+mod layout;
+use layout::{LayoutTree, Pane, PaneContent, PaneManager};
 use terminal::Terminal;
 use uicomponents::{CommandBar, MessageBar, StatusBar, UIComponent, View};
 
@@ -49,6 +50,8 @@ impl PromptType {
 pub struct Editor {
     should_quit: bool,
     view: View,
+    layout_tree: LayoutTree,
+    pane_manager: PaneManager,
     status_bar: StatusBar,
     message_bar: MessageBar,
     command_bar: CommandBar,
@@ -60,27 +63,101 @@ pub struct Editor {
 
 impl Editor {
     // region: Struct Lifecycle
+    // pub fn new() -> Result<Self, Error> {
+    //     let current_hook = take_hook();
+    //     set_hook(Box::new(move |panic_info| {
+    //         let _ = Terminal::terminate();
+    //         current_hook(panic_info);
+    //     }));
+    //     Terminal::initialize()?;
+    //     let mut editor = Self::default();
+    //     let size = Terminal::size().unwrap_or_default();
+    //     editor.handle_resize_command(size);
+
+    //     editor.update_message("HELP: Ctrl-F = find | Ctrl-S = save | Ctrl-Q = quit");
+    //     let args: Vec<String> = env::args().collect();
+    //     if let Some(file_name) = args.get(1) {
+    //         debug_assert!(!file_name.is_empty());
+    //         if editor.view.load(file_name).is_err() {
+    //             editor.update_message(&format!("ERR:Could not open file: {file_name}"));
+    //         }
+    //     }
+
+    //     editor.refresh_status();
+    //     Ok(editor)
+    // }
     pub fn new() -> Result<Self, Error> {
         let current_hook = take_hook();
+
         set_hook(Box::new(move |panic_info| {
             let _ = Terminal::terminate();
             current_hook(panic_info);
         }));
+
         Terminal::initialize()?;
-        let mut editor = Self::default();
-        let size = Terminal::size().unwrap_or_default();
-        editor.handle_resize_command(size);
+
+        let terminal_size = Terminal::size().unwrap_or_default();
+
+        let root_rect = Rect {
+            position: Position { row: 0, col: 0 },
+
+            size: Size {
+                height: terminal_size.height.saturating_sub(2),
+                width: terminal_size.width,
+            },
+        };
+
+        // Initial Pane
+        let initial_pane = Pane {
+            pane_id: 0,
+            content: PaneContent::TextView(View::default()),
+            active: true,
+        };
+
+        // Phase II systems
+        let pane_manager = PaneManager::new(initial_pane);
+
+        let layout_tree = LayoutTree::new(0, root_rect);
+
+        let mut editor = Self {
+            should_quit: false,
+
+            // old system still active
+            view: View::default(),
+
+            // new systems
+            layout_tree,
+            pane_manager,
+
+            status_bar: StatusBar::default(),
+            message_bar: MessageBar::default(),
+            command_bar: CommandBar::default(),
+
+            prompt_type: PromptType::None,
+
+            terminal_size,
+
+            title: String::new(),
+
+            quit_times: 0,
+        };
+
+        editor.handle_resize_command(terminal_size);
 
         editor.update_message("HELP: Ctrl-F = find | Ctrl-S = save | Ctrl-Q = quit");
+
         let args: Vec<String> = env::args().collect();
+
         if let Some(file_name) = args.get(1) {
             debug_assert!(!file_name.is_empty());
+
             if editor.view.load(file_name).is_err() {
-                editor.update_message(&format!("ERR:Could not open file: {file_name}"));
+                editor.update_message(&format!("ERR: Could not open file: {file_name}"));
             }
         }
 
         editor.refresh_status();
+
         Ok(editor)
     }
 

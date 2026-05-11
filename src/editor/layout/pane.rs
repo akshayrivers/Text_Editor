@@ -13,17 +13,16 @@ Pane should know:
     - whether it is focused
     - geometry assigned to it
 */
-use crate::prelue::*;
+use crate::editor::uicomponents::View;
 //NOTE:for now the pane is owning the Rect, needs to move into layout tree because it will be calculated there
-enum PaneContent {
-    TextView(TextView),
-    PluginView(PluginView),
-    FileExplorer(FileExplorerView),
-    Popup(PopupView),
+pub enum PaneContent {
+    TextView(View),
+    // PluginView(PluginView),
+    // FileExplorer(FileExplorerView),
+    // Popup(PopupView),
 }
-struct Pane {
-    pane_id: usize,
-    rect: Rect,
-    content: PaneContent,
-    active: bool,
+pub struct Pane {
+    pub pane_id: usize,
+    pub content: PaneContent,
+    pub active: bool,
 }

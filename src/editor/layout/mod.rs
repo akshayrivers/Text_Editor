@@ -16,8 +16,7 @@ Now Layouts can also be done in two ways ->
         - structural representation only
 
     pane.rs
-        - editor viewport abstraction
-        - scroll/cursor/buffer state
+        - Geometry abstraction and dispather
 
     panemanager.rs
         - pane lookup and lifecycle
@@ -28,3 +27,11 @@ Now Layouts can also be done in two ways ->
         - integration with editor render loop
 
 */
+
+pub mod layouttree;
+pub mod pane;
+pub mod panemanager;
+
+pub use layouttree::{LayoutNode, LayoutTree, SplitDirection};
+pub use pane::{Pane, PaneContent};
+pub use panemanager::PaneManager;
