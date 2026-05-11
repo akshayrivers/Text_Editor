@@ -48,9 +48,24 @@ impl Terminal {
         Self::queue_command(Clear(ClearType::CurrentLine))?;
         Ok(())
     }
+
+    pub fn clear_rect_line(rect: Rect, row: RowIdx) -> Result<(), Error> {
+        Self::move_caret_to(Position {
+            row,
+            col: rect.position.col,
+        })?;
+
+        let blank = " ".repeat(rect.size.width);
+
+        Self::print(&blank)?;
+
+        Ok(())
+    }
+
     pub fn move_caret_to(position: Position) -> Result<(), std::io::Error> {
         #[allow(clippy::as_conversions, clippy::cast_possible_truncation)]
         Self::queue_command(MoveTo(position.col as u16, position.row as u16))?;
+
         Ok(())
     }
     pub fn hide_caret() -> Result<(), Error> {
@@ -79,33 +94,39 @@ impl Terminal {
     }
     pub fn size() -> Result<Size, Error> {
         let (width_u16, height_u16) = size()?;
+
         #[allow(clippy::as_conversions)]
         let height = height_u16 as usize;
+
         #[allow(clippy::as_conversions)]
         let width = width_u16 as usize;
 
         Ok(Size { height, width })
     }
+
     pub fn enter_alternate_screen() -> Result<(), Error> {
         Self::queue_command(EnterAlternateScreen)?;
         Ok(())
     }
+
     pub fn leave_alternate_screen() -> Result<(), Error> {
         Self::queue_command(LeaveAlternateScreen)?;
         Ok(())
     }
-    pub fn print_row(row: RowIdx, line_text: &str) -> Result<(), Error> {
-        Self::move_caret_to(Position { row, col: 0 })?;
-        Self::clear_line()?;
-        Self::print(line_text)?;
+
+    pub fn print_at(position: Position, text: &str) -> Result<(), Error> {
+        Self::move_caret_to(position)?;
+        Self::print(text)?;
+
         Ok(())
     }
-    pub fn print_annotated_row(
-        row: RowIdx,
+
+    pub fn print_annotated_at(
+        position: Position,
         annotated_string: &AnnotatedString,
     ) -> Result<(), Error> {
-        Self::move_caret_to(Position { row, col: 0 })?;
-        Self::clear_line()?;
+        Self::move_caret_to(position)?;
+
         annotated_string
             .into_iter()
             .try_for_each(|part| -> Result<(), Error> {
@@ -113,28 +134,108 @@ impl Terminal {
                     let attribute: Attribute = annotation_type.into();
                     Self::set_attribute(&attribute)?;
                 }
+
                 Self::print(part.string)?;
+
                 Self::reset_color()?;
 
                 Ok(())
             })?;
+
         Ok(())
     }
-    fn set_attribute(attribute: &Attribute) -> Result<(), Error> {
+
+    pub fn print_row(row: RowIdx, line_text: &str) -> Result<(), Error> {
+        Self::move_caret_to(Position { row, col: 0 })?;
+
+        Self::clear_line()?;
+        Self::print(line_text)?;
+
+        Ok(())
+    }
+
+    pub fn print_annotated_row(
+        row: RowIdx,
+        annotated_string: &AnnotatedString,
+    ) -> Result<(), Error> {
+        Self::move_caret_to(Position { row, col: 0 })?;
+
+        Self::clear_line()?;
+
+        annotated_string
+            .into_iter()
+            .try_for_each(|part| -> Result<(), Error> {
+                if let Some(annotation_type) = part.annotation_type {
+                    let attribute: Attribute = annotation_type.into();
+                    Self::set_attribute(&attribute)?;
+                }
+
+                Self::print(part.string)?;
+
+                Self::reset_color()?;
+
+                Ok(())
+            })?;
+
+        Ok(())
+    }
+
+    pub fn print_rect(rect: Rect, row_offset: usize, text: &str) -> Result<(), Error> {
+        let row = rect.position.row.saturating_add(row_offset);
+
+        Self::clear_rect_line(rect, row)?;
+
+        Self::print_at(
+            Position {
+                row,
+                col: rect.position.col,
+            },
+            text,
+        )?;
+
+        Ok(())
+    }
+
+    pub fn print_annotated_rect(
+        rect: Rect,
+        row_offset: usize,
+        annotated_string: &AnnotatedString,
+    ) -> Result<(), Error> {
+        let row = rect.position.row.saturating_add(row_offset);
+
+        Self::clear_rect_line(rect, row)?;
+
+        Self::print_annotated_at(
+            Position {
+                row,
+                col: rect.position.col,
+            },
+            annotated_string,
+        )?;
+
+        Ok(())
+    }
+
+    pub fn set_attribute(attribute: &Attribute) -> Result<(), Error> {
         if let Some(foreground_color) = attribute.foreground {
             Self::queue_command(SetForegroundColor(foreground_color))?;
         }
+
         if let Some(background_color) = attribute.background {
             Self::queue_command(SetBackgroundColor(background_color))?;
         }
+
         Ok(())
     }
-    fn reset_color() -> Result<(), Error> {
+
+    pub fn reset_color() -> Result<(), Error> {
         Self::queue_command(ResetColor)?;
         Ok(())
     }
+
     pub fn print_inverted_row(row: RowIdx, line_text: &str) -> Result<(), Error> {
         let width = Self::size()?.width;
+
         Self::print_row(row, &format!("{Reverse}{line_text:width$.width$}{Reset}"))
     }
 }

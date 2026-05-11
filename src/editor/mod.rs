@@ -114,30 +114,60 @@ impl Editor {
         if self.terminal_size.height == 0 || self.terminal_size.width == 0 {
             return;
         }
-        let bottom_bar_row = self.terminal_size.height.saturating_sub(1);
-        let _ = Terminal::hide_caret();
-        if self.in_prompt() {
-            self.command_bar.render(bottom_bar_row);
-        } else {
-            self.message_bar.render(bottom_bar_row);
-        }
-        if self.terminal_size.height > 1 {
-            self.status_bar
-                .render(self.terminal_size.height.saturating_sub(2));
-        }
-        if self.terminal_size.height > 2 {
-            self.view.render(0);
-        }
-        let new_caret_pos = if self.in_prompt() {
-            Position {
-                row: bottom_bar_row,
-                col: self.command_bar.caret_position_col(),
-            }
-        } else {
-            self.view.caret_position()
+
+        let Size { height, width } = self.terminal_size;
+
+        let message_bar_rect = Rect {
+            position: Position {
+                row: height.saturating_sub(1),
+                col: 0,
+            },
+            size: Size { height: 1, width },
         };
-        debug_assert!(new_caret_pos.col <= self.terminal_size.width);
-        debug_assert!(new_caret_pos.row <= self.terminal_size.height);
+
+        let status_bar_rect = Rect {
+            position: Position {
+                row: height.saturating_sub(2),
+                col: 0,
+            },
+            size: Size { height: 1, width },
+        };
+
+        let view_rect = Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: height.saturating_sub(2),
+                width,
+            },
+        };
+
+        let _ = Terminal::hide_caret();
+
+        if self.in_prompt() {
+            self.command_bar.render(message_bar_rect);
+        } else {
+            self.message_bar.render(message_bar_rect);
+        }
+
+        if height > 1 {
+            self.status_bar.render(status_bar_rect);
+        }
+
+        if height > 2 {
+            self.view.render(view_rect);
+        }
+
+        let new_caret_pos = if self.in_prompt() {
+            self.command_bar.caret_position()
+        } else {
+            self.view
+                .caret_position()
+                .saturating_add(view_rect.position)
+        };
+
+        debug_assert!(new_caret_pos.col <= width);
+        debug_assert!(new_caret_pos.row <= height);
+
         let _ = Terminal::move_caret_to(new_caret_pos);
 
         let _ = Terminal::show_caret();
@@ -197,17 +227,36 @@ impl Editor {
     }
     pub fn handle_resize_command(&mut self, size: Size) {
         self.terminal_size = size;
-        self.view.resize(Size {
-            height: size.height.saturating_sub(2),
-            width: size.width,
+
+        let Size { height, width } = size;
+
+        self.view.resize(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: height.saturating_sub(2),
+                width,
+            },
         });
-        let bar_size = Size {
-            height: 1,
-            width: size.width,
+
+        let bottom_bar_rect = Rect {
+            position: Position {
+                row: height.saturating_sub(1),
+                col: 0,
+            },
+            size: Size { height: 1, width },
         };
-        self.message_bar.resize(bar_size);
-        self.status_bar.resize(bar_size);
-        self.command_bar.resize(bar_size);
+
+        let status_bar_rect = Rect {
+            position: Position {
+                row: height.saturating_sub(2),
+                col: 0,
+            },
+            size: Size { height: 1, width },
+        };
+
+        self.message_bar.resize(bottom_bar_rect);
+        self.command_bar.resize(bottom_bar_rect);
+        self.status_bar.resize(status_bar_rect);
     }
 
     // endregion

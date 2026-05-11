@@ -49,7 +49,7 @@ pub struct View {
     buffer: Buffer,
     needs_redraw: bool,
     // always starting at (0,0)and the size will dietermine the visible area
-    size: Size,
+    rect: Rect,
     text_location: Location,
     scroll_offset: Position,
     search_info: Option<SearchInfo>,
@@ -88,7 +88,7 @@ impl View {
     pub fn handle_move_command(&mut self, command: Move) {
         // This match moves the positon, but does not check for all boundaries.
         // The final boundarline checking happens after the match statement.
-        let Size { height, .. } = self.size;
+        let Size { height, .. } = self.rect.size;
         match command {
             Move::Up => self.move_up(1),
             Move::Down => self.move_down(1),
@@ -252,8 +252,8 @@ impl View {
         self.mark_redraw(true);
     }
 
-    fn render_line(at: RowIdx, line_text: &str) -> Result<(), Error> {
-        Terminal::print_row(at, line_text)
+    fn render_line(rect: Rect, row_offset: RowIdx, line_text: &str) -> Result<(), Error> {
+        Terminal::print_rect(rect, row_offset, line_text)
     }
     fn build_welcome_message(width: usize) -> String {
         if width == 0 {
@@ -388,7 +388,7 @@ impl View {
     }
     // SCROLLING
     fn scroll_vertically(&mut self, to: RowIdx) {
-        let Size { height, .. } = self.size;
+        let Size { height, .. } = self.rect.size;
         let offset_changed = if to < self.scroll_offset.row {
             self.scroll_offset.row = to;
             true
@@ -403,7 +403,7 @@ impl View {
         }
     }
     fn scroll_horizontally(&mut self, to: ColIdx) {
-        let Size { width, .. } = self.size;
+        let Size { width, .. } = self.rect.size;
         let offset_changed = if to < self.scroll_offset.col {
             self.scroll_offset.col = to;
             true
@@ -418,7 +418,7 @@ impl View {
         }
     }
     fn center_text_location(&mut self) {
-        let Size { height, width } = self.size;
+        let Size { height, width } = self.rect.size;
         let Position { row, col } = self.text_location_to_position();
         let vertical_mid = height.div_ceil(2);
         let horizontal_mid = width.div_ceil(2);
@@ -434,6 +434,7 @@ impl View {
     pub fn caret_position(&self) -> Position {
         self.text_location_to_position()
             .saturating_sub(self.scroll_offset)
+            .saturating_add(self.rect.position)
     }
     fn text_location_to_position(&self) -> Position {
         let row = self.text_location.line_idx;
@@ -568,56 +569,72 @@ impl UIComponent for View {
     fn mark_redraw(&mut self, value: bool) {
         self.needs_redraw = value;
     }
+
     fn needs_redraw(&self) -> bool {
         self.needs_redraw
     }
-    fn set_size(&mut self, size: Size) {
-        self.size = size;
+
+    fn set_size(&mut self, rect: Rect) {
+        self.rect = rect;
         self.scroll_text_location_into_view();
     }
-    fn draw(&mut self, origin_row: RowIdx) -> Result<(), Error> {
-        let Size { height, width } = self.size;
-        let end_y = origin_row.saturating_add(height);
+
+    fn draw(&mut self, rect: Rect) -> Result<(), Error> {
+        let Rect { position, size } = rect;
+
+        let Position {
+            row: origin_row,
+            col: _origin_col,
+        } = position;
+
+        let Size { height, width } = size;
+
+        let end_row = origin_row.saturating_add(height);
 
         let top_third = height.div_ceil(3);
+
         let scroll_top = self.scroll_offset.row;
+
         let query = self
             .search_info
             .as_ref()
             .and_then(|search_info| search_info.query.as_deref());
+
         let selected_match = query.is_some().then_some(self.text_location);
+
         let mut highlighter = Highlighter::new(
             query,
             selected_match,
             self.buffer.get_file_info().get_file_type(),
         );
-        for current_row in 0..end_y.saturating_add(scroll_top) {
-            self.buffer.highlight(current_row, &mut highlighter); // the full document is highlighted
+
+        // the full document is highlighted
+        for current_row in 0..end_row.saturating_add(scroll_top) {
+            self.buffer.highlight(current_row, &mut highlighter);
         }
-        for current_row in origin_row..end_y {
-            // to get the correct line index, we have to take current_row (the absolute row on screen),
-            // subtract origin_row to get the current row relative to the view (ranging from 0 to self.size.height)
-            // and add the scroll offset.
-            let line_idx = current_row
-                .saturating_sub(origin_row)
-                .saturating_add(scroll_top);
+
+        // viewport rendering
+        for screen_row in 0..height {
+            let line_idx = screen_row.saturating_add(scroll_top);
+
             let left = self.scroll_offset.col;
-            let right = self.scroll_offset.col.saturating_add(width);
+            let right = left.saturating_add(width);
+
             if let Some(annotated_string) =
                 self.buffer
                     .get_highlighted_substring(line_idx, left..right, &highlighter)
             {
-                Terminal::print_annotated_row(current_row, &annotated_string)?;
-            } else if current_row == top_third && self.buffer.is_empty() {
-                Self::render_line(current_row, &Self::build_welcome_message(width))?;
+                Terminal::print_annotated_rect(rect, screen_row, &annotated_string)?;
+            } else if screen_row == top_third && self.buffer.is_empty() {
+                Self::render_line(rect, screen_row, &Self::build_welcome_message(width))?;
             } else {
-                Self::render_line(current_row, "~")?;
+                Self::render_line(rect, screen_row, "~")?;
             }
         }
+
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,9 +643,12 @@ mod tests {
     // Helper: build a View with some text already loaded
     fn view_with_text(text: &str) -> View {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
         for ch in text.chars() {
             if ch == '\n' {
@@ -654,9 +674,12 @@ mod tests {
     #[test]
     fn undo_single_insert() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         view.handle_edit_command(Edit::Insert('a'));
@@ -669,9 +692,12 @@ mod tests {
     #[test]
     fn redo_single_insert() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         view.handle_edit_command(Edit::Insert('a'));
@@ -685,9 +711,12 @@ mod tests {
     #[test]
     fn undo_multiple_inserts() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         for ch in "hello".chars() {
@@ -704,9 +733,12 @@ mod tests {
     #[test]
     fn undo_then_redo_restores_text() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         for ch in "hi".chars() {
@@ -726,9 +758,12 @@ mod tests {
     #[test]
     fn undo_newline_merges_lines() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         for ch in "hello".chars() {
@@ -745,9 +780,12 @@ mod tests {
     #[test]
     fn redo_newline_splits_lines() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         for ch in "hello".chars() {
@@ -764,9 +802,12 @@ mod tests {
     #[test]
     fn newline_in_middle_of_line_undo() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         for ch in "hello".chars() {
@@ -858,9 +899,12 @@ mod tests {
     #[test]
     fn cursor_position_restored_after_undo_insert() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         view.handle_edit_command(Edit::Insert('a'));
@@ -875,9 +919,12 @@ mod tests {
     #[test]
     fn cursor_position_restored_after_redo_insert() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         view.handle_edit_command(Edit::Insert('a'));
@@ -890,9 +937,12 @@ mod tests {
     #[test]
     fn cursor_on_correct_line_after_undo_newline() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         for ch in "hello".chars() {
@@ -910,9 +960,12 @@ mod tests {
     #[test]
     fn new_edit_clears_redo_stack() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         view.handle_edit_command(Edit::Insert('a'));
@@ -929,9 +982,12 @@ mod tests {
     #[test]
     fn undo_on_empty_stack_does_nothing() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         // Should not panic
@@ -942,9 +998,12 @@ mod tests {
     #[test]
     fn redo_on_empty_stack_does_nothing() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         view.redo();
@@ -987,9 +1046,12 @@ mod tests {
     #[test]
     fn undo_insert_unicode_char() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         view.handle_edit_command(Edit::Insert('ü'));
@@ -1004,9 +1066,12 @@ mod tests {
     #[test]
     fn rapid_inserts_form_a_group() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         // Simulate typing "hello" with no delay — all within GROUP_TIMEOUT_MS
@@ -1028,9 +1093,12 @@ mod tests {
     #[test]
     fn undo_group_removes_all_chars_at_once() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         for ch in "hello".chars() {
@@ -1050,9 +1118,12 @@ mod tests {
     #[test]
     fn redo_group_reinserts_all_chars() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         for ch in "hello".chars() {
@@ -1070,9 +1141,12 @@ mod tests {
     #[test]
     fn multiple_undos_and_redos_stay_consistent() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         // Type "abc" with forced grouping — they merge into ONE InsertGroup
@@ -1094,9 +1168,12 @@ mod tests {
     #[test]
     fn delete_between_inserts_breaks_group() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         // Type "hel" — forms InsertGroup("hel"), cursor at grapheme 3
@@ -1125,9 +1202,12 @@ mod tests {
     #[test]
     fn cursor_at_group_start_after_undo() {
         let mut view = View::default();
-        view.set_size(Size {
-            height: 24,
-            width: 80,
+        view.set_size(Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: 24,
+                width: 80,
+            },
         });
 
         // Start cursor at grapheme 3 (simulate typing mid-document)

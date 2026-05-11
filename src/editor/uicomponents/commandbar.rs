@@ -1,6 +1,8 @@
 use super::super::{command::Edit, Line, Terminal};
 use super::UIComponent;
+
 use crate::prelude::*;
+
 use std::{cmp::min, io::Error};
 
 #[derive(Default)]
@@ -8,32 +10,51 @@ pub struct CommandBar {
     prompt: String,
     value: Line,
     needs_redraw: bool,
-    size: Size,
+    rect: Rect,
 }
 
 impl CommandBar {
     pub fn handle_edit_command(&mut self, command: Edit) {
         match command {
             Edit::Insert(character) => self.value.append_char(character),
+
             Edit::Delete | Edit::InsertNewLine => {}
+
             Edit::DeleteBackward => self.value.delete_last(),
         }
+
         self.mark_redraw(true);
     }
+
     pub fn caret_position_col(&self) -> ColIdx {
         let max_width = self
             .prompt
             .len()
             .saturating_add(self.value.grapheme_count());
-        min(max_width, self.size.width)
+
+        min(max_width, self.rect.size.width)
     }
+
+    pub fn caret_position(&self) -> Position {
+        Position {
+            row: self.rect.position.row,
+            col: self
+                .rect
+                .position
+                .col
+                .saturating_add(self.caret_position_col()),
+        }
+    }
+
     pub fn value(&self) -> String {
         self.value.to_string()
     }
+
     pub fn set_prompt(&mut self, prompt: &str) {
         self.prompt = prompt.to_string();
         self.mark_redraw(true);
     }
+
     pub fn clear_value(&mut self) {
         self.value = Line::default();
         self.mark_redraw(true);
@@ -44,26 +65,43 @@ impl UIComponent for CommandBar {
     fn mark_redraw(&mut self, value: bool) {
         self.needs_redraw = value;
     }
+
     fn needs_redraw(&self) -> bool {
         self.needs_redraw
     }
-    fn set_size(&mut self, size: Size) {
-        self.size = size;
+
+    fn set_size(&mut self, rect: Rect) {
+        self.rect = rect;
     }
-    fn draw(&mut self, origin: RowIdx) -> Result<(), Error> {
-        let area_for_value = self.size.width.saturating_sub(self.prompt.len()); //this is how much space there is between the right side of the prompt and the edge of the bar
-        let value_end = self.value.width(); // we always want to show the left part of the value, therefore the end of the visible range we try to access will be equal to the full width
-        let value_start = value_end.saturating_sub(area_for_value); //This should give us the start for the grapheme subrange we want to print out.
+
+    fn draw(&mut self, rect: Rect) -> Result<(), Error> {
+        let width = rect.size.width;
+
+        // this is how much space there is between
+        // the right side of the prompt and the edge of the bar
+        let area_for_value = width.saturating_sub(self.prompt.len());
+
+        // we always want to show the left part of the value,
+        // therefore the end of the visible range we try to access
+        // will be equal to the full width
+        let value_end = self.value.width();
+
+        // This should give us the start for the grapheme
+        // subrange we want to print out.
+        let value_start = value_end.saturating_sub(area_for_value);
+
         let message = format!(
             "{}{}",
             self.prompt,
             self.value.get_visible_graphemes(value_start..value_end)
         );
-        let to_print = if message.len() <= self.size.width {
+
+        let to_print = if message.len() <= width {
             message
         } else {
             String::new()
         };
-        Terminal::print_row(origin, &to_print)
+
+        Terminal::print_rect(rect, 0, &to_print)
     }
 }

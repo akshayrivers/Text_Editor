@@ -6,7 +6,7 @@ use std::io::Error;
 pub struct StatusBar {
     current_status: DocumentStatus,
     needs_redraw: bool,
-    size: Size,
+    rect: Rect,
 }
 
 impl StatusBar {
@@ -25,31 +25,55 @@ impl UIComponent for StatusBar {
     fn needs_redraw(&self) -> bool {
         self.needs_redraw
     }
-    fn set_size(&mut self, size: Size) {
-        self.size = size;
+
+    fn set_size(&mut self, rect: Rect) {
+        self.rect = rect;
     }
-    fn draw(&mut self, origin_row: RowIdx) -> Result<(), Error> {
+
+    fn draw(&mut self, rect: Rect) -> Result<(), Error> {
+        let width = rect.size.width;
+
         let line_count = self.current_status.line_count_to_string();
+
         let modified_indicator = self.current_status.modified_indicator_to_string();
+
         let beginning = format!(
             "{} - {line_count} {modified_indicator}",
             self.current_status.file_name
         );
         // Assemble the back part
         let position_indicator = self.current_status.position_indicator_to_string();
+
         let file_type = self.current_status.file_type_to_string();
+
         let back_part = format!("{file_type} | {position_indicator}");
-        // assemple the whole status bar
-        let remainder_len = self.size.width.saturating_sub(beginning.len());
+
+        // assemble the whole status bar
+        let remainder_len = width.saturating_sub(beginning.len());
+
         let status = format!("{beginning}{back_part:>remainder_len$}");
 
-        //Only print out the status if it fits. Otherwise write out an empty string to ensure the row is cleared.
-        let to_print = if status.len() <= self.size.width {
+        // Only print out the status if it fits.
+        // Otherwise write out an empty string
+        // to ensure the row is cleared.
+        let to_print = if status.len() <= width {
             status
         } else {
             String::new()
         };
-        Terminal::print_inverted_row(origin_row, &to_print)?;
+
+        Terminal::clear_rect_line(rect, rect.position.row)?;
+
+        Terminal::print_at(
+            rect.position,
+            &format!(
+                "{}{:width$}{}",
+                crossterm::style::Attribute::Reverse,
+                to_print,
+                crossterm::style::Attribute::Reset,
+                width = width,
+            ),
+        )?;
 
         Ok(())
     }

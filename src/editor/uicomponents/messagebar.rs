@@ -28,6 +28,7 @@ pub struct MessageBar {
     current_msg: Message,
     needs_redraw: bool,
     cleared_after_expiry: bool,
+    rect: Rect,
 }
 
 impl MessageBar {
@@ -48,8 +49,12 @@ impl UIComponent for MessageBar {
     fn needs_redraw(&self) -> bool {
         (!self.cleared_after_expiry && self.current_msg.is_expired()) || self.needs_redraw
     }
-    fn set_size(&mut self, _: Size) {}
-    fn draw(&mut self, origin: RowIdx) -> Result<(), Error> {
+
+    fn set_size(&mut self, rect: Rect) {
+        self.rect = rect;
+    }
+
+    fn draw(&mut self, rect: Rect) -> Result<(), Error> {
         if self.current_msg.is_expired() {
             self.cleared_after_expiry = true;
             // upon expiry we need to clear the msg first
@@ -59,6 +64,7 @@ impl UIComponent for MessageBar {
         } else {
             &self.current_msg.text
         };
-        Terminal::print_row(origin, message)
+
+        Terminal::print_rect(rect, 0, message)
     }
 }
