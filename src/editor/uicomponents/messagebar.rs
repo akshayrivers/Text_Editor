@@ -54,7 +54,7 @@ impl UIComponent for MessageBar {
         self.rect = rect;
     }
 
-    fn draw(&mut self, rect: Rect) -> Result<(), Error> {
+    fn draw(&mut self) -> Result<(), Error> {
         if self.current_msg.is_expired() {
             self.cleared_after_expiry = true;
             // upon expiry we need to clear the msg first
@@ -65,6 +65,6 @@ impl UIComponent for MessageBar {
             &self.current_msg.text
         };
 
-        Terminal::print_rect(rect, 0, message)
+        Terminal::print_rect(self.rect, 0, message)
     }
 }

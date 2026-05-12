@@ -579,8 +579,8 @@ impl UIComponent for View {
         self.scroll_text_location_into_view();
     }
 
-    fn draw(&mut self, rect: Rect) -> Result<(), Error> {
-        let Rect { position, size } = rect;
+    fn draw(&mut self) -> Result<(), Error> {
+        let Rect { position, size } = self.rect;
 
         let Position {
             row: origin_row,
@@ -624,11 +624,11 @@ impl UIComponent for View {
                 self.buffer
                     .get_highlighted_substring(line_idx, left..right, &highlighter)
             {
-                Terminal::print_annotated_rect(rect, screen_row, &annotated_string)?;
+                Terminal::print_annotated_rect(self.rect, screen_row, &annotated_string)?;
             } else if screen_row == top_third && self.buffer.is_empty() {
-                Self::render_line(rect, screen_row, &Self::build_welcome_message(width))?;
+                Self::render_line(self.rect, screen_row, &Self::build_welcome_message(width))?;
             } else {
-                Self::render_line(rect, screen_row, "~")?;
+                Self::render_line(self.rect, screen_row, "~")?;
             }
         }
 

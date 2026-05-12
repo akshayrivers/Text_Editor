@@ -13,16 +13,62 @@ Pane should know:
     - whether it is focused
     - geometry assigned to it
 */
-use crate::editor::uicomponents::View;
-//NOTE:for now the pane is owning the Rect, needs to move into layout tree because it will be calculated there
+use crate::{
+    editor::uicomponents::{UIComponent, View},
+    prelude::*,
+};
+
 pub enum PaneContent {
     TextView(View),
-    // PluginView(PluginView),
-    // FileExplorer(FileExplorerView),
-    // Popup(PopupView),
+    PluginView(View),
+    FileExplorer(View),
+    Popup(View),
 }
+
 pub struct Pane {
     pub pane_id: usize,
     pub content: PaneContent,
     pub active: bool,
+}
+
+impl Pane {
+    pub fn view(&self) -> Option<&View> {
+        match &self.content {
+            PaneContent::TextView(view)
+            | PaneContent::PluginView(view)
+            | PaneContent::FileExplorer(view)
+            | PaneContent::Popup(view) => Some(view),
+        }
+    }
+
+    pub fn view_mut(&mut self) -> Option<&mut View> {
+        match &mut self.content {
+            PaneContent::TextView(view)
+            | PaneContent::PluginView(view)
+            | PaneContent::FileExplorer(view)
+            | PaneContent::Popup(view) => Some(view),
+        }
+    }
+    pub fn resize(&mut self, rect: Rect) {
+        match &mut self.content {
+            PaneContent::TextView(view) => view.resize(rect),
+            PaneContent::PluginView(view) => view.resize(rect),
+            PaneContent::FileExplorer(view) => view.resize(rect),
+            PaneContent::Popup(view) => view.resize(rect),
+        }
+    }
+    pub fn render(&mut self) {
+        match &mut self.content {
+            PaneContent::TextView(view)
+            | PaneContent::PluginView(view)
+            | PaneContent::FileExplorer(view)
+            | PaneContent::Popup(view) => {
+                view.render();
+            }
+        }
+    }
+
+    pub fn caret_position(&self) -> Option<Position> {
+        self.view().map(|view| view.caret_position())
+    }
 }

@@ -17,9 +17,10 @@ pub trait UIComponent {
     fn set_size(&mut self, rect: Rect);
 
     // Draw this component if it's visible and in need of redrawing
-    fn render(&mut self, rect: Rect) {
+    // in my design the rect will be owned by the component itself
+    fn render(&mut self) {
         if self.needs_redraw() {
-            if let Err(err) = self.draw(rect) {
+            if let Err(err) = self.draw() {
                 #[cfg(debug_assertions)]
                 {
                     panic!("Could not render component: {err:?}");
@@ -34,5 +35,5 @@ pub trait UIComponent {
         }
     }
     // Method to actually draw the component, must be implemented by each component
-    fn draw(&mut self, rect: Rect) -> Result<(), Error>;
+    fn draw(&mut self) -> Result<(), Error>;
 }

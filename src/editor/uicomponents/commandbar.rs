@@ -74,8 +74,8 @@ impl UIComponent for CommandBar {
         self.rect = rect;
     }
 
-    fn draw(&mut self, rect: Rect) -> Result<(), Error> {
-        let width = rect.size.width;
+    fn draw(&mut self) -> Result<(), Error> {
+        let width = self.rect.size.width;
 
         // this is how much space there is between
         // the right side of the prompt and the edge of the bar
@@ -102,6 +102,6 @@ impl UIComponent for CommandBar {
             String::new()
         };
 
-        Terminal::print_rect(rect, 0, &to_print)
+        Terminal::print_rect(self.rect, 0, &to_print)
     }
 }

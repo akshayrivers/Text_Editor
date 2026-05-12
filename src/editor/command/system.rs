@@ -12,6 +12,8 @@ pub enum System {
     Search,
     Undo,
     Redo,
+    SplitHorizontal,
+    SplitVertical,
 }
 
 impl TryFrom<KeyEvent> for System {
@@ -28,6 +30,8 @@ impl TryFrom<KeyEvent> for System {
                 Char('f') => Ok(Self::Search),
                 Char('z') => Ok(Self::Undo),
                 Char('r') => Ok(Self::Redo),
+                Char('h') => Ok(Self::SplitHorizontal),
+                Char('v') => Ok(Self::SplitVertical),
                 _ => Err(format!("Unsupported CONTROL+{code:?} combination")),
             }
         } else if modifiers == KeyModifiers::NONE && matches!(code, KeyCode::Esc) {

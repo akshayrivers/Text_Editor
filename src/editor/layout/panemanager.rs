@@ -1,7 +1,4 @@
-use crate::{
-    editor::layout::{Pane, PaneContent},
-    prelude::*,
-};
+use crate::editor::layout::{Pane, PaneContent};
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -25,7 +22,7 @@ impl PaneManager {
         }
     }
 
-    pub fn create_pane(&mut self, content: PaneContent, rect: Rect) -> usize {
+    pub fn create_pane(&mut self, content: PaneContent) -> usize {
         let pane_id = self.next_pane_id;
 
         self.next_pane_id += 1;
@@ -40,7 +37,6 @@ impl PaneManager {
 
         pane_id
     }
-
     pub fn get_pane(&self, pane_id: usize) -> Option<&Pane> {
         self.panes.get(&pane_id)
     }
@@ -68,7 +64,7 @@ impl PaneManager {
 
         self.active_pane = pane_id;
     }
-
+    // needs more work
     pub fn remove_pane(&mut self, pane_id: usize) -> Option<Pane> {
         self.panes.remove(&pane_id)
     }

@@ -30,8 +30,8 @@ impl UIComponent for StatusBar {
         self.rect = rect;
     }
 
-    fn draw(&mut self, rect: Rect) -> Result<(), Error> {
-        let width = rect.size.width;
+    fn draw(&mut self) -> Result<(), Error> {
+        let width = self.rect.size.width;
 
         let line_count = self.current_status.line_count_to_string();
 
@@ -62,10 +62,10 @@ impl UIComponent for StatusBar {
             String::new()
         };
 
-        Terminal::clear_rect_line(rect, rect.position.row)?;
+        Terminal::clear_rect_line(self.rect, self.rect.position.row)?;
 
         Terminal::print_at(
-            rect.position,
+            self.rect.position,
             &format!(
                 "{}{:width$}{}",
                 crossterm::style::Attribute::Reverse,

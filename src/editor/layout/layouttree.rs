@@ -223,4 +223,22 @@ impl LayoutTree {
                 .or_else(|| Self::find_node(second, target_pane_id)),
         }
     }
+    pub fn collect_leaf_layouts(&self) -> Vec<(usize, Rect)> {
+        let mut layouts = Vec::new();
+        Self::collect_layouts(&self.root, &mut layouts);
+        layouts
+    }
+
+    fn collect_layouts(node: &LayoutNode, layouts: &mut Vec<(usize, Rect)>) {
+        match node {
+            LayoutNode::Leaf { pane_id, rect } => {
+                layouts.push((*pane_id, *rect));
+            }
+
+            LayoutNode::Split { first, second, .. } => {
+                Self::collect_layouts(first, layouts);
+                Self::collect_layouts(second, layouts);
+            }
+        }
+    }
 }
