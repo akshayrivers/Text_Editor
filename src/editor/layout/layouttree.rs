@@ -121,26 +121,6 @@ impl LayoutTree {
         }
     }
 
-    // traversal
-    pub fn collect_panes(&self) -> Vec<usize> {
-        let mut panes = Vec::new();
-        Self::collect_leaf_panes(&self.root, &mut panes);
-        panes
-    }
-
-    fn collect_leaf_panes(node: &LayoutNode, panes: &mut Vec<usize>) {
-        match node {
-            LayoutNode::Leaf { pane_id, .. } => {
-                panes.push(*pane_id);
-            }
-
-            LayoutNode::Split { first, second, .. } => {
-                Self::collect_leaf_panes(first, panes);
-                Self::collect_leaf_panes(second, panes);
-            }
-        }
-    }
-
     // mutation
     pub fn split_pane(
         &mut self,
@@ -204,25 +184,6 @@ impl LayoutTree {
         }
     }
 
-    // lookup
-    pub fn find_pane(&self, target_pane_id: usize) -> Option<&LayoutNode> {
-        Self::find_node(&self.root, target_pane_id)
-    }
-
-    fn find_node(node: &LayoutNode, target_pane_id: usize) -> Option<&LayoutNode> {
-        match node {
-            LayoutNode::Leaf { pane_id, .. } => {
-                if *pane_id == target_pane_id {
-                    Some(node)
-                } else {
-                    None
-                }
-            }
-
-            LayoutNode::Split { first, second, .. } => Self::find_node(first, target_pane_id)
-                .or_else(|| Self::find_node(second, target_pane_id)),
-        }
-    }
     pub fn collect_leaf_layouts(&self) -> Vec<(usize, Rect)> {
         let mut layouts = Vec::new();
         Self::collect_layouts(&self.root, &mut layouts);

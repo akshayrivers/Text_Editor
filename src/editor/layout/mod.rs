@@ -32,6 +32,6 @@ pub mod layouttree;
 pub mod pane;
 pub mod panemanager;
 
-pub use layouttree::{LayoutNode, LayoutTree, SplitDirection};
+pub use layouttree::{LayoutTree, SplitDirection};
 pub use pane::{Pane, PaneContent};
 pub use panemanager::PaneManager;

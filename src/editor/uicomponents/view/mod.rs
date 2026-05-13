@@ -435,6 +435,7 @@ impl View {
         self.text_location_to_position()
             .saturating_sub(self.scroll_offset)
             .saturating_add(self.rect.position)
+            .saturating_add(Position { row: 1, col: 1 })
     }
     fn text_location_to_position(&self) -> Position {
         let row = self.text_location.line_idx;
@@ -579,19 +580,96 @@ impl UIComponent for View {
         self.scroll_text_location_into_view();
     }
 
+    // fn draw(&mut self) -> Result<(), Error> {
+    //     let Rect { position, size } = self.rect;
+
+    //     let Position {
+    //         row: origin_row,
+    //         col: _origin_col,
+    //     } = position;
+
+    //     let Size { height, width } = size;
+
+    //     let end_row = origin_row.saturating_add(height);
+
+    //     let top_third = height.div_ceil(3);
+
+    //     let scroll_top = self.scroll_offset.row;
+
+    //     let query = self
+    //         .search_info
+    //         .as_ref()
+    //         .and_then(|search_info| search_info.query.as_deref());
+
+    //     let selected_match = query.is_some().then_some(self.text_location);
+
+    //     let mut highlighter = Highlighter::new(
+    //         query,
+    //         selected_match,
+    //         self.buffer.get_file_info().get_file_type(),
+    //     );
+
+    //     // the full document is highlighted
+    //     for current_row in 0..end_row.saturating_add(scroll_top) {
+    //         self.buffer.highlight(current_row, &mut highlighter);
+    //     }
+
+    //     // viewport rendering
+    //     for screen_row in 0..height {
+    //         let line_idx = screen_row.saturating_add(scroll_top);
+
+    //         let left = self.scroll_offset.col;
+    //         let right = left.saturating_add(width);
+
+    //         if let Some(annotated_string) =
+    //             self.buffer
+    //                 .get_highlighted_substring(line_idx, left..right, &highlighter)
+    //         {
+    //             Terminal::print_annotated_rect(self.rect, screen_row, &annotated_string)?;
+    //         } else if screen_row == top_third && self.buffer.is_empty() {
+    //             Self::render_line(self.rect, screen_row, &Self::build_welcome_message(width))?;
+    //         } else {
+    //             Self::render_line(self.rect, screen_row, "~")?;
+    //         }
+    //     }
+
+    //     Ok(())
+    // }
     fn draw(&mut self) -> Result<(), Error> {
-        let Rect { position, size } = self.rect;
+        let rect = self.rect;
+
+        let Rect { position, size } = rect;
 
         let Position {
             row: origin_row,
-            col: _origin_col,
+            col: origin_col,
         } = position;
 
         let Size { height, width } = size;
 
-        let end_row = origin_row.saturating_add(height);
+        // avoid tiny pane crashes
+        if height < 3 || width < 3 {
+            return Ok(());
+        }
 
-        let top_third = height.div_ceil(3);
+        // draw pane border first
+        Terminal::draw_border(rect)?;
+
+        // inner content area
+        let content_rect = Rect {
+            position: Position {
+                row: origin_row + 1,
+                col: origin_col + 1,
+            },
+            size: Size {
+                height: height.saturating_sub(2),
+                width: width.saturating_sub(2),
+            },
+        };
+
+        let end_row = origin_row.saturating_add(content_rect.size.height);
+
+        let top_third = content_rect.size.height.div_ceil(3);
 
         let scroll_top = self.scroll_offset.row;
 
@@ -608,27 +686,31 @@ impl UIComponent for View {
             self.buffer.get_file_info().get_file_type(),
         );
 
-        // the full document is highlighted
+        // full document highlighting
         for current_row in 0..end_row.saturating_add(scroll_top) {
             self.buffer.highlight(current_row, &mut highlighter);
         }
 
-        // viewport rendering
-        for screen_row in 0..height {
+        // render inside bordered content area
+        for screen_row in 0..content_rect.size.height {
             let line_idx = screen_row.saturating_add(scroll_top);
 
             let left = self.scroll_offset.col;
-            let right = left.saturating_add(width);
+            let right = left.saturating_add(content_rect.size.width);
 
             if let Some(annotated_string) =
                 self.buffer
                     .get_highlighted_substring(line_idx, left..right, &highlighter)
             {
-                Terminal::print_annotated_rect(self.rect, screen_row, &annotated_string)?;
+                Terminal::print_annotated_rect(content_rect, screen_row, &annotated_string)?;
             } else if screen_row == top_third && self.buffer.is_empty() {
-                Self::render_line(self.rect, screen_row, &Self::build_welcome_message(width))?;
+                Self::render_line(
+                    content_rect,
+                    screen_row,
+                    &Self::build_welcome_message(content_rect.size.width),
+                )?;
             } else {
-                Self::render_line(self.rect, screen_row, "~")?;
+                Self::render_line(content_rect, screen_row, "~")?;
             }
         }
 

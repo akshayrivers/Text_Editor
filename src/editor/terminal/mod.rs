@@ -238,4 +238,49 @@ impl Terminal {
 
         Self::print_row(row, &format!("{Reverse}{line_text:width$.width$}{Reset}"))
     }
+    pub fn draw_border(rect: Rect) -> Result<(), Error> {
+        let Position { row, col } = rect.position;
+
+        let Size { height, width } = rect.size;
+
+        if width < 2 || height < 2 {
+            return Ok(());
+        }
+
+        // Top
+        Self::print_at(
+            Position { row, col },
+            &format!("┌{}┐", "─".repeat(width.saturating_sub(2))),
+        )?;
+
+        // Sides
+        for current_row in row + 1..row + height.saturating_sub(1) {
+            Self::print_at(
+                Position {
+                    row: current_row,
+                    col,
+                },
+                "│",
+            )?;
+
+            Self::print_at(
+                Position {
+                    row: current_row,
+                    col: col + width.saturating_sub(1),
+                },
+                "│",
+            )?;
+        }
+
+        // Bottom
+        Self::print_at(
+            Position {
+                row: row + height.saturating_sub(1),
+                col,
+            },
+            &format!("└{}┘", "─".repeat(width.saturating_sub(2))),
+        )?;
+
+        Ok(())
+    }
 }

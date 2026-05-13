@@ -67,8 +67,4 @@ impl Pane {
             }
         }
     }
-
-    pub fn caret_position(&self) -> Option<Position> {
-        self.view().map(|view| view.caret_position())
-    }
 }
