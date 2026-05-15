@@ -46,6 +46,8 @@ enum EditOperation {
 }
 #[derive(Default)]
 pub struct View {
+    id: usize,
+    is_active: bool,
     buffer: Buffer,
     needs_redraw: bool,
     // always starting at (0,0)and the size will dietermine the visible area
@@ -72,6 +74,15 @@ impl View {
             current_line_idx: self.text_location.line_idx,
             is_modified: self.buffer.is_dirty(),
             file_type: file_info.get_file_type(),
+        }
+    }
+    pub fn set_id(&mut self, id: usize) {
+        self.id = id;
+    }
+    pub fn set_active(&mut self, active: bool) {
+        if self.is_active != active {
+            self.is_active = active;
+            self.mark_redraw(true);
         }
     }
     pub const fn is_file_loaded(&self) -> bool {
@@ -654,7 +665,18 @@ impl UIComponent for View {
 
         // draw pane border first
         Terminal::draw_border(rect)?;
-
+        let label = if self.is_active {
+            format!("|PANE {} (ACTIVE)|", self.id)
+        } else {
+            format!("|PANE {}|", self.id)
+        };
+        let _ = Terminal::print_at(
+            Position {
+                col: rect.position.col.saturating_add(2),
+                row: rect.position.row,
+            },
+            &label,
+        );
         // inner content area
         let content_rect = Rect {
             position: Position {

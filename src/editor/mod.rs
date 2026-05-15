@@ -1,8 +1,10 @@
 use crate::{editor::layout::SplitDirection, prelude::*};
 use std::{
     env,
+    fmt::format,
     io::Error,
     panic::{set_hook, take_hook},
+    process::CommandArgs,
 };
 mod annotatedstring;
 pub mod annotationtype;
@@ -29,7 +31,10 @@ use self::command::{
     Command::{self, Edit, Move, System},
     Edit::InsertNewLine,
     Move::{Down, Left, Right, Up},
-    System::{Dismiss, Quit, Redo, Resize, Save, Search, SplitHorizontal, SplitVertical, Undo},
+    System::{
+        Dismiss, OpenCommandBar, Quit, Redo, Resize, Save, Search, SplitHorizontal, SplitVertical,
+        Undo,
+    },
 };
 
 const QUIT_TIMES: u8 = 3;
@@ -40,6 +45,8 @@ enum PromptType {
     Save,
     #[default]
     None,
+    FocusPane,
+    ClosePane,
 }
 impl PromptType {
     fn is_none(&self) -> bool {
@@ -105,11 +112,14 @@ impl Editor {
                 width: terminal_size.width,
             },
         };
+        let initial_pane_id = 0;
+        let mut initial_view = View::default();
+        initial_view.set_id(initial_pane_id);
 
         // Initial Pane
         let initial_pane = Pane {
-            pane_id: 0,
-            content: PaneContent::TextView(View::default()),
+            pane_id: initial_pane_id,
+            content: PaneContent::TextView(initial_view),
             active: true,
         };
 
@@ -273,6 +283,8 @@ impl Editor {
             PromptType::Search => self.process_command_during_search(command),
             PromptType::Save => self.process_command_during_save(command),
             PromptType::None => self.process_command_no_prompt(command),
+            PromptType::FocusPane => self.handle_pane_commands(command),
+            PromptType::ClosePane => self.handle_pane_commands(command),
         }
     }
     fn process_command_no_prompt(&mut self, command: Command) {
@@ -293,6 +305,7 @@ impl Editor {
             System(SplitHorizontal) => self.split_active_pane(SplitDirection::Horizontal),
 
             System(SplitVertical) => self.split_active_pane(SplitDirection::Vertical),
+            System(OpenCommandBar) => self.set_prompt(PromptType::FocusPane),
         }
     }
     fn split_active_pane(&mut self, direction: SplitDirection) {
@@ -301,12 +314,18 @@ impl Editor {
             .active_pane()
             .map(|pane| pane.pane_id)
             .expect("No active pane");
-
         // create new pane
         let new_pane_id = self
             .pane_manager
             .create_pane(PaneContent::TextView(View::default()));
 
+        if let Some(view) = self
+            .pane_manager
+            .get_pane_mut(new_pane_id)
+            .and_then(|p| p.view_mut())
+        {
+            view.set_id(new_pane_id);
+        }
         // mutate layout tree
         if self
             .layout_tree
@@ -412,7 +431,8 @@ impl Editor {
     fn process_command_during_save(&mut self, command: Command) {
         match command {
             System(
-                Quit | Resize(_) | Search | Save | Undo | Redo | SplitHorizontal | SplitVertical,
+                Quit | Resize(_) | Search | Save | Undo | Redo | SplitHorizontal | SplitVertical
+                | OpenCommandBar,
             )
             | Move(_) => {} //already handled
             System(Dismiss) => {
@@ -462,14 +482,77 @@ impl Editor {
             Move(Right | Down) => self.active_view_mut().search_next(),
             Move(Up | Left) => self.active_view_mut().search_prev(),
             System(
-                Quit | Resize(_) | Search | Save | Undo | Redo | SplitHorizontal | SplitVertical,
+                Quit | Resize(_) | Search | Save | Undo | Redo | SplitHorizontal | SplitVertical
+                | OpenCommandBar,
             )
             | Move(_) => {} // Not applicable during save, Resize already handled at this stage
         }
     }
 
     // endregion
+    // region: pane focus and close
+    fn handle_pane_commands(&mut self, command: Command) {
+        match command {
+            System(Dismiss) => {
+                self.set_prompt(PromptType::None);
+            }
+            Edit(InsertNewLine) => {
+                let input = self.command_bar.value();
+                self.execute_pane_command(&input);
+                self.set_prompt(PromptType::None);
+            }
 
+            Edit(edit_command) => {
+                self.command_bar.handle_edit_command(edit_command);
+            }
+            _ => {}
+        }
+    }
+    fn execute_pane_command(&mut self, input: &str) {
+        let parts: Vec<&str> = input.split_whitespace().collect();
+        match parts.as_slice() {
+            ["focus", id_str] => {
+                if let Ok(id) = id_str.parse::<usize>() {
+                    if self.pane_manager.get_pane(id).is_some() {
+                        self.pane_manager.set_active_pane(id);
+                    } else {
+                        self.update_message(&format!("Pane {} not found", id));
+                    }
+                }
+            }
+            ["close", id_str] => {
+                if let Ok(id) = id_str.parse::<usize>() {
+                    self.close_pane(id);
+                }
+            }
+            ["close"] => {
+                // we will close the current active pane
+                let id = self.pane_manager.active_pane().unwrap().pane_id;
+                self.close_pane(id);
+            }
+
+            _ => self.update_message("Invalid command! Try 'focus 1' or 'close 1' or close"),
+        }
+    }
+    fn close_pane(&mut self, id: usize) {
+        // Remove from the layout tree
+        if self.layout_tree.remove_node(id).is_ok() {
+            // Remove from pane manager
+            self.pane_manager.remove_pane(id);
+
+            // need to assign new pane_id in the pane manager
+            if self.pane_manager.active_pane().is_none() {
+                if let Some((any_id, _)) = self.layout_tree.collect_leaf_layouts().first() {
+                    self.pane_manager.set_active_pane(*any_id);
+                }
+            }
+            // we resize, ultimately we should improve the above logic in future
+            self.handle_resize_command(self.terminal_size);
+            self.update_message(&format!("Pane {} closed", id));
+        } else {
+            self.update_message("Cannot close the last pane!");
+        }
+    }
     // region: message & command bar
     fn update_message(&mut self, new_message: &str) {
         self.message_bar.update_message(new_message);
@@ -490,6 +573,12 @@ impl Editor {
                 self.command_bar
                     .set_prompt("Search (Esc to cancel, Arrows to navigate): ");
             }
+            PromptType::FocusPane => self
+                .command_bar
+                .set_prompt("So you want to close the pane huh"),
+            PromptType::ClosePane => self
+                .command_bar
+                .set_prompt("So you want to close the pane yonro"),
         }
         self.command_bar.clear_value();
         self.prompt_type = prompt_type;

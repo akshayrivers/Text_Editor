@@ -58,11 +58,13 @@ impl Pane {
         }
     }
     pub fn render(&mut self) {
+        let active = self.active;
         match &mut self.content {
             PaneContent::TextView(view)
             | PaneContent::PluginView(view)
             | PaneContent::FileExplorer(view)
             | PaneContent::Popup(view) => {
+                view.set_active(active);
                 view.render();
             }
         }

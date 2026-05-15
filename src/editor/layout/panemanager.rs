@@ -1,4 +1,4 @@
-use crate::editor::layout::{Pane, PaneContent};
+use crate::editor::layout::{layouttree, Pane, PaneContent};
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -54,6 +54,9 @@ impl PaneManager {
     }
 
     pub fn set_active_pane(&mut self, pane_id: usize) {
+        if !self.panes.contains_key(&pane_id) {
+            return;
+        }
         if let Some(current_active) = self.panes.get_mut(&self.active_pane) {
             current_active.active = false;
         }
