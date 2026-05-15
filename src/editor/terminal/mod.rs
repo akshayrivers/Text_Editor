@@ -3,10 +3,8 @@ use super::AnnotatedString;
 use crate::prelude::*;
 use attribute::Attribute;
 use crossterm::cursor::{Hide, MoveTo, Show};
-use crossterm::style::{
-    Attribute::{Reset, Reverse},
-    Print, ResetColor, SetBackgroundColor, SetForegroundColor,
-};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, MouseEvent};
+use crossterm::style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, size, Clear, ClearType, DisableLineWrap, EnableLineWrap,
     EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
@@ -21,6 +19,7 @@ impl Terminal {
         Self::enable_line_wrap()?;
         Self::show_caret()?;
         Self::execute()?;
+        Self::disable_mouse_capture()?;
         disable_raw_mode()?;
         Ok(())
     }
@@ -30,6 +29,7 @@ impl Terminal {
     }
     pub fn initialize() -> Result<(), Error> {
         enable_raw_mode()?;
+        Self::enable_mouse_capture()?;
         Self::enter_alternate_screen()?;
         Self::disable_line_wrap()?;
         Self::clear_screen()?;
@@ -40,14 +40,23 @@ impl Terminal {
         queue!(stdout(), command)?;
         Ok(())
     }
+    pub fn enable_mouse_capture() -> Result<(), Error> {
+        Self::queue_command(EnableMouseCapture)?;
+        Ok(())
+    }
+
+    pub fn disable_mouse_capture() -> Result<(), Error> {
+        Self::queue_command(DisableMouseCapture)?;
+        Ok(())
+    }
     pub fn clear_screen() -> Result<(), Error> {
         Self::queue_command(Clear(ClearType::All))?;
         Ok(())
     }
-    pub fn clear_line() -> Result<(), Error> {
-        Self::queue_command(Clear(ClearType::CurrentLine))?;
-        Ok(())
-    }
+    // pub fn clear_line() -> Result<(), Error> {
+    //     Self::queue_command(Clear(ClearType::CurrentLine))?;
+    //     Ok(())
+    // }
 
     pub fn clear_rect_line(rect: Rect, row: RowIdx) -> Result<(), Error> {
         Self::move_caret_to(Position {
@@ -145,40 +154,40 @@ impl Terminal {
         Ok(())
     }
 
-    pub fn print_row(row: RowIdx, line_text: &str) -> Result<(), Error> {
-        Self::move_caret_to(Position { row, col: 0 })?;
+    // pub fn print_row(row: RowIdx, line_text: &str) -> Result<(), Error> {
+    //     Self::move_caret_to(Position { row, col: 0 })?;
 
-        Self::clear_line()?;
-        Self::print(line_text)?;
+    //     Self::clear_line()?;
+    //     Self::print(line_text)?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    pub fn print_annotated_row(
-        row: RowIdx,
-        annotated_string: &AnnotatedString,
-    ) -> Result<(), Error> {
-        Self::move_caret_to(Position { row, col: 0 })?;
+    // pub fn print_annotated_row(
+    //     row: RowIdx,
+    //     annotated_string: &AnnotatedString,
+    // ) -> Result<(), Error> {
+    //     Self::move_caret_to(Position { row, col: 0 })?;
 
-        Self::clear_line()?;
+    //     Self::clear_line()?;
 
-        annotated_string
-            .into_iter()
-            .try_for_each(|part| -> Result<(), Error> {
-                if let Some(annotation_type) = part.annotation_type {
-                    let attribute: Attribute = annotation_type.into();
-                    Self::set_attribute(&attribute)?;
-                }
+    //     annotated_string
+    //         .into_iter()
+    //         .try_for_each(|part| -> Result<(), Error> {
+    //             if let Some(annotation_type) = part.annotation_type {
+    //                 let attribute: Attribute = annotation_type.into();
+    //                 Self::set_attribute(&attribute)?;
+    //             }
 
-                Self::print(part.string)?;
+    //             Self::print(part.string)?;
 
-                Self::reset_color()?;
+    //             Self::reset_color()?;
 
-                Ok(())
-            })?;
+    //             Ok(())
+    //         })?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     pub fn print_rect(rect: Rect, row_offset: usize, text: &str) -> Result<(), Error> {
         let row = rect.position.row.saturating_add(row_offset);
@@ -233,11 +242,11 @@ impl Terminal {
         Ok(())
     }
 
-    pub fn print_inverted_row(row: RowIdx, line_text: &str) -> Result<(), Error> {
-        let width = Self::size()?.width;
+    // pub fn print_inverted_row(row: RowIdx, line_text: &str) -> Result<(), Error> {
+    //     let width = Self::size()?.width;
 
-        Self::print_row(row, &format!("{Reverse}{line_text:width$.width$}{Reset}"))
-    }
+    //     Self::print_row(row, &format!("{Reverse}{line_text:width$.width$}{Reset}"))
+    // }
     pub fn draw_border(rect: Rect) -> Result<(), Error> {
         let Position { row, col } = rect.position;
 

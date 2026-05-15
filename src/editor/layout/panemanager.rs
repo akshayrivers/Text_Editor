@@ -1,4 +1,4 @@
-use crate::editor::layout::{layouttree, Pane, PaneContent};
+use crate::editor::layout::{Pane, PaneContent};
 use std::collections::HashMap;
 
 #[derive(Default)]

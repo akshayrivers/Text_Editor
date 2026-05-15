@@ -3,6 +3,7 @@ use std::io::Error;
 
 pub enum LayoutNode {
     Split {
+        split_id: usize,
         direction: SplitDirection,
         ratio: f32,
         first: Box<LayoutNode>,
@@ -20,8 +21,14 @@ pub enum SplitDirection {
     Horizontal,
     Vertical,
 }
+pub struct SplitHandle {
+    pub id: usize,
+    pub direction: SplitDirection,
+    pub rect: Rect,
+}
 pub struct LayoutTree {
     root: LayoutNode,
+    next_split_id: usize,
 }
 
 impl Default for LayoutTree {
@@ -37,6 +44,7 @@ impl LayoutTree {
                 pane_id: initial_pane_id,
                 rect,
             },
+            next_split_id: 1,
         }
     }
 
@@ -54,6 +62,7 @@ impl LayoutTree {
             }
 
             LayoutNode::Split {
+                split_id,
                 direction,
                 ratio,
                 first,
@@ -64,7 +73,8 @@ impl LayoutTree {
 
                 match direction {
                     SplitDirection::Vertical => {
-                        let first_width = (rect.size.width as f32 * *ratio) as usize;
+                        let first_width = ((rect.size.width as f32 * *ratio) as usize)
+                            .clamp(1, rect.size.width.saturating_sub(1));
                         let second_width = rect.size.width.saturating_sub(first_width);
 
                         let first_rect = Rect {
@@ -91,7 +101,8 @@ impl LayoutTree {
                     }
 
                     SplitDirection::Horizontal => {
-                        let first_height = (rect.size.height as f32 * *ratio) as usize;
+                        let first_height = ((rect.size.height as f32 * *ratio) as usize)
+                            .clamp(1, rect.size.height.saturating_sub(1));
                         let second_height = rect.size.height.saturating_sub(first_height);
 
                         let first_rect = Rect {
@@ -129,12 +140,15 @@ impl LayoutTree {
         direction: SplitDirection,
         ratio: f32,
     ) -> Result<(), Error> {
+        let split_id = self.next_split_id;
+        self.next_split_id += 1;
         Self::split_node(
             &mut self.root,
             target_pane_id,
             new_pane_id,
             direction,
             ratio,
+            split_id,
         )
     }
 
@@ -144,6 +158,7 @@ impl LayoutTree {
         new_pane_id: usize,
         direction: SplitDirection,
         ratio: f32,
+        split_id: usize,
     ) -> Result<(), Error> {
         match node {
             LayoutNode::Leaf { pane_id, rect } => {
@@ -161,6 +176,7 @@ impl LayoutTree {
                     };
 
                     *node = LayoutNode::Split {
+                        split_id: split_id,
                         direction,
                         ratio,
                         first: Box::new(old_leaf),
@@ -175,11 +191,27 @@ impl LayoutTree {
             }
 
             LayoutNode::Split { first, second, .. } => {
-                if Self::split_node(first, target_pane_id, new_pane_id, direction, ratio).is_ok() {
+                if Self::split_node(
+                    first,
+                    target_pane_id,
+                    new_pane_id,
+                    direction,
+                    ratio,
+                    split_id,
+                )
+                .is_ok()
+                {
                     return Ok(());
                 }
 
-                Self::split_node(second, target_pane_id, new_pane_id, direction, ratio)
+                Self::split_node(
+                    second,
+                    target_pane_id,
+                    new_pane_id,
+                    direction,
+                    ratio,
+                    split_id,
+                )
             }
         }
     }
@@ -212,6 +244,7 @@ impl LayoutTree {
         }
     }
 
+    // need to use type safe methods rather than string comparisions
     fn remove_node_recursive(
         &self,
         node: LayoutNode,
@@ -225,6 +258,7 @@ impl LayoutTree {
                 Ok(LayoutNode::Leaf { pane_id, rect })
             }
             LayoutNode::Split {
+                split_id,
                 direction,
                 ratio,
                 first,
@@ -239,6 +273,7 @@ impl LayoutTree {
                             Ok(new_second) => {
                                 // neither was the target, so we rebuild the split
                                 Ok(LayoutNode::Split {
+                                    split_id,
                                     direction,
                                     ratio,
                                     first: Box::new(new_first),
@@ -254,6 +289,117 @@ impl LayoutTree {
             }
         }
     }
+
+    pub fn find_split(&self, mouse: Position) -> Option<SplitHandle> {
+        Self::find_split_at(&self.root, mouse)
+    }
+
+    pub fn find_split_at(node: &LayoutNode, mouse: Position) -> Option<SplitHandle> {
+        const TOLERANCE: usize = 2; // 2 character tolerance zone
+
+        match node {
+            LayoutNode::Leaf { .. } => None,
+            LayoutNode::Split {
+                split_id,
+                direction,
+                ratio,
+                first,
+                second,
+                rect,
+            } => {
+                match direction {
+                    SplitDirection::Vertical => {
+                        let first_width = ((rect.size.width as f32 * *ratio) as usize)
+                            .clamp(1, rect.size.width.saturating_sub(1));
+                        let divider_col = rect.position.col + first_width;
+
+                        let inside_vertical_span = mouse.row >= rect.position.row
+                            && mouse.row < rect.position.row + rect.size.height;
+
+                        // Add tolerance zone
+                        let mouse_over_divider = mouse.col >= divider_col.saturating_sub(TOLERANCE)
+                            && mouse.col <= divider_col.saturating_add(TOLERANCE);
+
+                        if mouse_over_divider && inside_vertical_span {
+                            return Some(SplitHandle {
+                                id: *split_id,
+                                direction: *direction,
+                                rect: *rect,
+                            });
+                        }
+                    }
+                    SplitDirection::Horizontal => {
+                        let first_height = ((rect.size.height as f32 * *ratio) as usize)
+                            .clamp(1, rect.size.height.saturating_sub(1));
+                        let divider_row = rect.position.row + first_height;
+
+                        let inside_horizontal_span = mouse.col >= rect.position.col
+                            && mouse.col < rect.position.col + rect.size.width;
+
+                        let mouse_over_divider = mouse.row >= divider_row.saturating_sub(TOLERANCE)
+                            && mouse.row <= divider_row.saturating_add(TOLERANCE);
+
+                        if mouse_over_divider && inside_horizontal_span {
+                            return Some(SplitHandle {
+                                id: *split_id,
+                                direction: *direction,
+                                rect: *rect,
+                            });
+                        }
+                    }
+                }
+                Self::find_split_at(first, mouse).or_else(|| Self::find_split_at(second, mouse))
+            }
+        }
+    }
+    pub fn resize_split(&mut self, split_id: usize, mouse: Position) {
+        Self::resize_node(&mut self.root, split_id, mouse);
+    }
+
+    fn resize_node(node: &mut LayoutNode, split_id: usize, mouse: Position) {
+        match node {
+            LayoutNode::Leaf { .. } => {}
+            LayoutNode::Split {
+                split_id: id,
+                direction,
+                ratio,
+                first,
+                second,
+                rect,
+            } => {
+                if *id == split_id {
+                    match direction {
+                        SplitDirection::Vertical => {
+                            let local_col = mouse.col.saturating_sub(rect.position.col);
+                            let new_ratio =
+                                (local_col as f32 / rect.size.width as f32).clamp(0.05, 0.95);
+
+                            #[cfg(debug_assertions)]
+                            println!("Resize: mouse.col={}, rect.pos.col={}, local_col={}, rect.width={}, old_ratio={}, new_ratio={}", 
+                            mouse.col, rect.position.col, local_col, rect.size.width, ratio, new_ratio);
+
+                            *ratio = new_ratio;
+                        }
+                        SplitDirection::Horizontal => {
+                            let local_row = mouse.row.saturating_sub(rect.position.row);
+                            let new_ratio =
+                                (local_row as f32 / rect.size.height as f32).clamp(0.05, 0.95);
+
+                            #[cfg(debug_assertions)]
+                            println!("Resize: mouse.row={}, rect.pos.row={}, local_row={}, rect.height={}, old_ratio={}, new_ratio={}", 
+                            mouse.row, rect.position.row, local_row, rect.size.height, ratio, new_ratio);
+
+                            *ratio = new_ratio;
+                        }
+                    }
+                } else {
+                    Self::resize_node(first, split_id, mouse);
+                    Self::resize_node(second, split_id, mouse);
+                }
+            }
+        }
+    }
+
     pub fn collect_leaf_layouts(&self) -> Vec<(usize, Rect)> {
         let mut layouts = Vec::new();
         Self::collect_layouts(&self.root, &mut layouts);

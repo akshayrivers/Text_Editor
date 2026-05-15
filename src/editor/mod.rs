@@ -1,10 +1,8 @@
 use crate::{editor::layout::SplitDirection, prelude::*};
 use std::{
     env,
-    fmt::format,
     io::Error,
     panic::{set_hook, take_hook},
-    process::CommandArgs,
 };
 mod annotatedstring;
 pub mod annotationtype;
@@ -23,19 +21,19 @@ use line::Line;
 mod filetype;
 use filetype::FileType;
 mod layout;
-use layout::{LayoutTree, Pane, PaneContent, PaneManager};
-use terminal::Terminal;
-use uicomponents::{CommandBar, MessageBar, StatusBar, UIComponent, View};
-
 use self::command::{
-    Command::{self, Edit, Move, System},
+    Command::{self, Edit, Mouse, Move, System},
     Edit::InsertNewLine,
+    MouseCommand::{LeftClick, LeftDrag, LeftRelease, ScrollDown, ScrollUp},
     Move::{Down, Left, Right, Up},
     System::{
         Dismiss, OpenCommandBar, Quit, Redo, Resize, Save, Search, SplitHorizontal, SplitVertical,
         Undo,
     },
 };
+use layout::{LayoutTree, Pane, PaneContent, PaneManager};
+use terminal::Terminal;
+use uicomponents::{CommandBar, MessageBar, StatusBar, UIComponent, View};
 
 const QUIT_TIMES: u8 = 3;
 
@@ -65,6 +63,7 @@ pub struct Editor {
     terminal_size: Size,
     title: String,
     quit_times: u8,
+    dragging_split: Option<usize>,
 }
 
 impl Editor {
@@ -146,6 +145,7 @@ impl Editor {
             title: String::new(),
 
             quit_times: 0,
+            dragging_split: None,
         };
 
         editor.handle_resize_command(terminal_size);
@@ -259,9 +259,18 @@ impl Editor {
         }
     }
     fn evaluate_event(&mut self, event: Event) {
+        // Debug mouse events
+        // #[cfg(debug_assertions)]
+        // if let Event::Mouse(mouse_event) = &event {
+        //     self.update_message(&format!(
+        //         "Mouse: {:?} at {:?}{:?}",
+        //         mouse_event.kind, mouse_event.row, mouse_event.column
+        //     ));
+        // }
         let should_process = match &event {
             Event::Key(KeyEvent { kind, .. }) => kind == &KeyEventKind::Press,
             Event::Resize(_, _) => true,
+            Event::Mouse(_) => true,
             _ => false,
         };
         if should_process {
@@ -306,7 +315,76 @@ impl Editor {
 
             System(SplitVertical) => self.split_active_pane(SplitDirection::Vertical),
             System(OpenCommandBar) => self.set_prompt(PromptType::FocusPane),
+            Mouse(LeftClick(position)) => {
+                self.pane_left_click(position);
+            }
+
+            Mouse(LeftDrag(position)) => {
+                self.pane_left_drag(position);
+            }
+
+            Mouse(LeftRelease(position)) => {
+                self.pane_left_release();
+            }
+            Mouse(ScrollDown(position)) => {
+                self.pane_scroll_down();
+            }
+            Mouse(ScrollUp(position)) => {
+                self.pane_scroll_up();
+            }
         }
+    }
+    fn pane_left_click(&mut self, position: Position) {
+        // check if user clicked on a split divider
+        if let Some(split) = self.layout_tree.find_split(position) {
+            self.dragging_split = Some(split.id);
+            return;
+        }
+
+        // otherwise focus pane under cursor
+        for (pane_id, rect) in self.layout_tree.collect_leaf_layouts() {
+            let inside = position.row >= rect.position.row
+                && position.row < rect.position.row + rect.size.height
+                && position.col >= rect.position.col
+                && position.col < rect.position.col + rect.size.width;
+
+            if inside {
+                self.pane_manager.set_active_pane(pane_id);
+                break;
+            }
+        }
+    }
+
+    fn pane_left_drag(&mut self, position: Position) {
+        if let Some(split_id) = self.dragging_split {
+            #[cfg(debug_assertions)]
+            self.update_message(&format!("Dragging split {} to {:?}", split_id, position));
+            self.layout_tree.resize_split(split_id, position);
+
+            let editor_rect = Rect {
+                position: Position { row: 0, col: 0 },
+                size: Size {
+                    height: self.terminal_size.height.saturating_sub(2),
+                    width: self.terminal_size.width,
+                },
+            };
+
+            self.layout_tree.compute_layout(editor_rect);
+            self.sync_pane_rects();
+        }
+    }
+    fn pane_left_release(&mut self) {
+        self.dragging_split = None;
+    }
+
+    fn pane_scroll_down(&mut self) {
+        self.active_view_mut()
+            .handle_move_command(command::Move::PageDown);
+    }
+
+    fn pane_scroll_up(&mut self) {
+        self.active_view_mut()
+            .handle_move_command(command::Move::PageUp);
     }
     fn split_active_pane(&mut self, direction: SplitDirection) {
         let active_pane_id = self
@@ -445,6 +523,7 @@ impl Editor {
                 self.set_prompt(PromptType::None);
             }
             Edit(edit_command) => self.command_bar.handle_edit_command(edit_command),
+            Mouse(_) => {}
         }
     }
     fn save(&mut self, file_name: Option<&str>) {
@@ -486,6 +565,7 @@ impl Editor {
                 | OpenCommandBar,
             )
             | Move(_) => {} // Not applicable during save, Resize already handled at this stage
+            Mouse(_) => {}
         }
     }
 

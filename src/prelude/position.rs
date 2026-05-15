@@ -1,5 +1,5 @@
 use super::{ColIdx, RowIdx};
-#[derive(Copy, Clone, Default, Eq, PartialEq)]
+#[derive(Copy, Clone, Default, Eq, PartialEq, Debug)]
 pub struct Position {
     pub col: ColIdx,
     pub row: RowIdx,

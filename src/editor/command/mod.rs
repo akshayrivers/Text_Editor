@@ -5,14 +5,17 @@ pub use movecommand::Move;
 mod system;
 pub use system::System;
 mod edit;
-use crate::prelude::*;
 pub use edit::Edit;
+mod mouse;
+use crate::prelude::*;
+pub use mouse::MouseCommand;
 
 #[derive(Clone, Copy)]
 pub enum Command {
     Move(Move),
     Edit(Edit),
     System(System),
+    Mouse(MouseCommand),
 }
 
 // clippy::as_conversions: Will run into problems for rare edge case systems where usize < u16
@@ -30,6 +33,7 @@ impl TryFrom<Event> for Command {
                 height: height_u16 as usize,
                 width: width_u16 as usize,
             }))),
+            Event::Mouse(mouse_event) => MouseCommand::try_from(mouse_event).map(Command::Mouse),
             _ => Err(format!("Event not supported: {event:?}")),
         }
     }
