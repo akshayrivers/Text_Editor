@@ -99,7 +99,7 @@ impl View {
     pub fn handle_move_command(&mut self, command: Move) {
         // This match moves the positon, but does not check for all boundaries.
         // The final boundarline checking happens after the match statement.
-        let Size { height, .. } = self.rect.size;
+        let height = self.rect.size.height.saturating_sub(2);
         match command {
             Move::Up => self.move_up(1),
             Move::Down => self.move_down(1),
@@ -399,7 +399,10 @@ impl View {
     }
     // SCROLLING
     fn scroll_vertically(&mut self, to: RowIdx) {
-        let Size { height, .. } = self.rect.size;
+        let height = self.rect.size.height.saturating_sub(2); // new borders man
+        if height == 0 {
+            return;
+        }
         let offset_changed = if to < self.scroll_offset.row {
             self.scroll_offset.row = to;
             true
@@ -414,7 +417,7 @@ impl View {
         }
     }
     fn scroll_horizontally(&mut self, to: ColIdx) {
-        let Size { width, .. } = self.rect.size;
+        let width = self.rect.size.width.saturating_sub(2); // same for the width part
         let offset_changed = if to < self.scroll_offset.col {
             self.scroll_offset.col = to;
             true
@@ -429,7 +432,8 @@ impl View {
         }
     }
     fn center_text_location(&mut self) {
-        let Size { height, width } = self.rect.size;
+        let height = self.rect.size.height.saturating_sub(2);
+        let width = self.rect.size.width.saturating_sub(2);
         let Position { row, col } = self.text_location_to_position();
         let vertical_mid = height.div_ceil(2);
         let horizontal_mid = width.div_ceil(2);
@@ -443,10 +447,23 @@ impl View {
         self.scroll_horizontally(col);
     }
     pub fn caret_position(&self) -> Position {
-        self.text_location_to_position()
-            .saturating_sub(self.scroll_offset)
-            .saturating_add(self.rect.position)
-            .saturating_add(Position { row: 1, col: 1 })
+        let Position { col, row } = self.text_location_to_position();
+        let relative_row = row.saturating_sub(self.scroll_offset.row);
+        let relative_col = col.saturating_sub(self.scroll_offset.col);
+
+        let max_row = self.rect.size.height.saturating_sub(3);
+        let max_col = self.rect.size.width.saturating_sub(3);
+
+        let clamped_row = min(relative_row, max_row);
+        let clamped_col = min(relative_col, max_col);
+        Position {
+            col: clamped_col
+                .saturating_add(self.rect.position.col)
+                .saturating_add(1),
+            row: clamped_row
+                .saturating_add(self.rect.position.row)
+                .saturating_add(1),
+        }
     }
     fn text_location_to_position(&self) -> Position {
         let row = self.text_location.line_idx;
