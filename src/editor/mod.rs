@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{editor::layout::SplitDirection, prelude::*};
 use std::{
     env,
     io::Error,
@@ -20,16 +20,20 @@ use documentstatus::DocumentStatus;
 use line::Line;
 mod filetype;
 use filetype::FileType;
-
+mod layout;
+use self::command::{
+    Command::{self, Edit, Mouse, Move, System},
+    Edit::InsertNewLine,
+    MouseCommand::{LeftClick, LeftDrag, LeftRelease, ScrollDown, ScrollUp},
+    Move::{Down, Left, Right, Up},
+    System::{
+        Dismiss, OpenCommandBar, Quit, Redo, Resize, Save, Search, SplitHorizontal, SplitVertical,
+        Undo,
+    },
+};
+use layout::{LayoutTree, Pane, PaneContent, PaneManager};
 use terminal::Terminal;
 use uicomponents::{CommandBar, MessageBar, StatusBar, UIComponent, View};
-
-use self::command::{
-    Command::{self, Edit, Move, System},
-    Edit::InsertNewLine,
-    Move::{Down, Left, Right, Up},
-    System::{Dismiss, Quit, Redo, Resize, Save, Search, Undo},
-};
 
 const QUIT_TIMES: u8 = 3;
 
@@ -39,6 +43,8 @@ enum PromptType {
     Save,
     #[default]
     None,
+    FocusPane,
+    ClosePane,
 }
 impl PromptType {
     fn is_none(&self) -> bool {
@@ -48,7 +54,8 @@ impl PromptType {
 #[derive(Default)]
 pub struct Editor {
     should_quit: bool,
-    view: View,
+    layout_tree: LayoutTree,
+    pane_manager: PaneManager,
     status_bar: StatusBar,
     message_bar: MessageBar,
     command_bar: CommandBar,
@@ -56,31 +63,107 @@ pub struct Editor {
     terminal_size: Size,
     title: String,
     quit_times: u8,
+    dragging_split: Option<usize>,
 }
 
 impl Editor {
     // region: Struct Lifecycle
+    // pub fn new() -> Result<Self, Error> {
+    //     let current_hook = take_hook();
+    //     set_hook(Box::new(move |panic_info| {
+    //         let _ = Terminal::terminate();
+    //         current_hook(panic_info);
+    //     }));
+    //     Terminal::initialize()?;
+    //     let mut editor = Self::default();
+    //     let size = Terminal::size().unwrap_or_default();
+    //     editor.handle_resize_command(size);
+
+    //     editor.update_message("HELP: Ctrl-F = find | Ctrl-S = save | Ctrl-Q = quit");
+    //     let args: Vec<String> = env::args().collect();
+    //     if let Some(file_name) = args.get(1) {
+    //         debug_assert!(!file_name.is_empty());
+    //         if editor.view.load(file_name).is_err() {
+    //             editor.update_message(&format!("ERR:Could not open file: {file_name}"));
+    //         }
+    //     }
+
+    //     editor.refresh_status();
+    //     Ok(editor)
+    // }
     pub fn new() -> Result<Self, Error> {
         let current_hook = take_hook();
+
         set_hook(Box::new(move |panic_info| {
             let _ = Terminal::terminate();
             current_hook(panic_info);
         }));
+
         Terminal::initialize()?;
-        let mut editor = Self::default();
-        let size = Terminal::size().unwrap_or_default();
-        editor.handle_resize_command(size);
+
+        let terminal_size = Terminal::size().unwrap_or_default();
+
+        let root_rect = Rect {
+            position: Position { row: 0, col: 0 },
+
+            size: Size {
+                height: terminal_size.height.saturating_sub(2),
+                width: terminal_size.width,
+            },
+        };
+        let initial_pane_id = 0;
+        let mut initial_view = View::default();
+        initial_view.set_id(initial_pane_id);
+
+        // Initial Pane
+        let initial_pane = Pane {
+            pane_id: initial_pane_id,
+            content: PaneContent::TextView(initial_view),
+            active: true,
+        };
+
+        // Phase II systems
+        let pane_manager = PaneManager::new(initial_pane);
+
+        let layout_tree = LayoutTree::new(0, root_rect);
+
+        let mut editor = Self {
+            should_quit: false,
+
+            // new systems
+            layout_tree,
+            pane_manager,
+
+            status_bar: StatusBar::default(),
+            message_bar: MessageBar::default(),
+            command_bar: CommandBar::default(),
+
+            prompt_type: PromptType::None,
+
+            terminal_size,
+
+            title: String::new(),
+
+            quit_times: 0,
+            dragging_split: None,
+        };
+
+        editor.handle_resize_command(terminal_size);
 
         editor.update_message("HELP: Ctrl-F = find | Ctrl-S = save | Ctrl-Q = quit");
+
         let args: Vec<String> = env::args().collect();
+
         if let Some(file_name) = args.get(1) {
             debug_assert!(!file_name.is_empty());
-            if editor.view.load(file_name).is_err() {
-                editor.update_message(&format!("ERR:Could not open file: {file_name}"));
+
+            if editor.active_view_mut().load(file_name).is_err() {
+                editor.update_message(&format!("ERR: Could not open file: {file_name}"));
             }
         }
 
         editor.refresh_status();
+
         Ok(editor)
     }
 
@@ -110,41 +193,65 @@ impl Editor {
             self.refresh_status();
         }
     }
+    fn active_view(&self) -> &View {
+        self.pane_manager
+            .active_pane()
+            .and_then(|pane| pane.view())
+            .expect("Active pane must contain a view")
+    }
+
+    fn active_view_mut(&mut self) -> &mut View {
+        self.pane_manager
+            .active_pane_mut()
+            .and_then(|pane| pane.view_mut())
+            .expect("Active pane must contain a view")
+    }
     fn refresh_screen(&mut self) {
         if self.terminal_size.height == 0 || self.terminal_size.width == 0 {
             return;
         }
-        let bottom_bar_row = self.terminal_size.height.saturating_sub(1);
+
+        let Size { height, width } = self.terminal_size;
+
         let _ = Terminal::hide_caret();
+
+        // Bottom UI
         if self.in_prompt() {
-            self.command_bar.render(bottom_bar_row);
+            self.command_bar.render();
         } else {
-            self.message_bar.render(bottom_bar_row);
+            self.message_bar.render();
         }
-        if self.terminal_size.height > 1 {
-            self.status_bar
-                .render(self.terminal_size.height.saturating_sub(2));
+
+        if height > 1 {
+            self.status_bar.render();
         }
-        if self.terminal_size.height > 2 {
-            self.view.render(0);
-        }
-        let new_caret_pos = if self.in_prompt() {
-            Position {
-                row: bottom_bar_row,
-                col: self.command_bar.caret_position_col(),
+
+        // Panes
+        if height > 2 {
+            for (pane_id, _) in self.layout_tree.collect_leaf_layouts() {
+                if let Some(pane) = self.pane_manager.get_pane_mut(pane_id) {
+                    pane.render();
+                }
             }
+        }
+
+        // Caret
+        let new_caret_pos = if self.in_prompt() {
+            self.command_bar.caret_position()
         } else {
-            self.view.caret_position()
+            self.active_view().caret_position()
         };
-        debug_assert!(new_caret_pos.col <= self.terminal_size.width);
-        debug_assert!(new_caret_pos.row <= self.terminal_size.height);
+
+        debug_assert!(new_caret_pos.col <= width);
+        debug_assert!(new_caret_pos.row <= height);
+
         let _ = Terminal::move_caret_to(new_caret_pos);
 
         let _ = Terminal::show_caret();
         let _ = Terminal::execute();
     }
     pub fn refresh_status(&mut self) {
-        let status = self.view.get_status();
+        let status = self.active_view().get_status();
         let title = format!("{} - {NAME}", status.file_name);
         self.status_bar.update_status(status);
         if title != self.title && matches!(Terminal::set_title(&title), Ok(())) {
@@ -152,9 +259,18 @@ impl Editor {
         }
     }
     fn evaluate_event(&mut self, event: Event) {
+        // Debug mouse events
+        // #[cfg(debug_assertions)]
+        // if let Event::Mouse(mouse_event) = &event {
+        //     self.update_message(&format!(
+        //         "Mouse: {:?} at {:?}{:?}",
+        //         mouse_event.kind, mouse_event.row, mouse_event.column
+        //     ));
+        // }
         let should_process = match &event {
             Event::Key(KeyEvent { kind, .. }) => kind == &KeyEventKind::Press,
             Event::Resize(_, _) => true,
+            Event::Mouse(_) => true,
             _ => false,
         };
         if should_process {
@@ -176,6 +292,8 @@ impl Editor {
             PromptType::Search => self.process_command_during_search(command),
             PromptType::Save => self.process_command_during_save(command),
             PromptType::None => self.process_command_no_prompt(command),
+            PromptType::FocusPane => self.handle_pane_commands(command),
+            PromptType::ClosePane => self.handle_pane_commands(command),
         }
     }
     fn process_command_no_prompt(&mut self, command: Command) {
@@ -190,24 +308,162 @@ impl Editor {
             System(Save) => self.handle_save_command(),
             System(Redo) => self.handle_redo_command(),
             System(Undo) => self.handle_undo_command(),
-            Edit(edit_command) => self.view.handle_edit_command(edit_command),
+            Edit(edit_command) => self.active_view_mut().handle_edit_command(edit_command),
 
-            Move(move_command) => self.view.handle_move_command(move_command),
+            Move(move_command) => self.active_view_mut().handle_move_command(move_command),
+            System(SplitHorizontal) => self.split_active_pane(SplitDirection::Horizontal),
+
+            System(SplitVertical) => self.split_active_pane(SplitDirection::Vertical),
+            System(OpenCommandBar) => self.set_prompt(PromptType::FocusPane),
+            Mouse(LeftClick(position)) => {
+                self.pane_left_click(position);
+            }
+
+            Mouse(LeftDrag(position)) => {
+                self.pane_left_drag(position);
+            }
+
+            Mouse(LeftRelease(position)) => {
+                self.pane_left_release();
+            }
+            Mouse(ScrollDown(position)) => {
+                self.pane_scroll_down();
+            }
+            Mouse(ScrollUp(position)) => {
+                self.pane_scroll_up();
+            }
         }
+    }
+    fn pane_left_click(&mut self, position: Position) {
+        // check if user clicked on a split divider
+        if let Some(split) = self.layout_tree.find_split(position) {
+            self.dragging_split = Some(split.id);
+            return;
+        }
+
+        // otherwise focus pane under cursor
+        for (pane_id, rect) in self.layout_tree.collect_leaf_layouts() {
+            let inside = position.row >= rect.position.row
+                && position.row < rect.position.row + rect.size.height
+                && position.col >= rect.position.col
+                && position.col < rect.position.col + rect.size.width;
+
+            if inside {
+                self.pane_manager.set_active_pane(pane_id);
+                break;
+            }
+        }
+    }
+
+    fn pane_left_drag(&mut self, position: Position) {
+        if let Some(split_id) = self.dragging_split {
+            #[cfg(debug_assertions)]
+            self.update_message(&format!("Dragging split {} to {:?}", split_id, position));
+            self.layout_tree.resize_split(split_id, position);
+
+            let editor_rect = Rect {
+                position: Position { row: 0, col: 0 },
+                size: Size {
+                    height: self.terminal_size.height.saturating_sub(2),
+                    width: self.terminal_size.width,
+                },
+            };
+
+            self.layout_tree.compute_layout(editor_rect);
+            self.sync_pane_rects();
+        }
+    }
+    fn pane_left_release(&mut self) {
+        self.dragging_split = None;
+    }
+
+    fn pane_scroll_down(&mut self) {
+        self.active_view_mut()
+            .handle_move_command(command::Move::PageDown);
+    }
+
+    fn pane_scroll_up(&mut self) {
+        self.active_view_mut()
+            .handle_move_command(command::Move::PageUp);
+    }
+    fn split_active_pane(&mut self, direction: SplitDirection) {
+        let active_pane_id = self
+            .pane_manager
+            .active_pane()
+            .map(|pane| pane.pane_id)
+            .expect("No active pane");
+        // create new pane
+        let new_pane_id = self
+            .pane_manager
+            .create_pane(PaneContent::TextView(View::default()));
+
+        if let Some(view) = self
+            .pane_manager
+            .get_pane_mut(new_pane_id)
+            .and_then(|p| p.view_mut())
+        {
+            view.set_id(new_pane_id);
+        }
+        // mutate layout tree
+        if self
+            .layout_tree
+            .split_pane(active_pane_id, new_pane_id, direction, 0.5)
+            .is_err()
+        {
+            self.update_message("Failed to split pane");
+            return;
+        }
+
+        // recompute geometry
+        let editor_rect = Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: self.terminal_size.height.saturating_sub(2),
+                width: self.terminal_size.width,
+            },
+        };
+
+        self.layout_tree.compute_layout(editor_rect);
+        self.sync_pane_rects();
+
+        // focus new pane
+        self.pane_manager.set_active_pane(new_pane_id);
     }
     pub fn handle_resize_command(&mut self, size: Size) {
         self.terminal_size = size;
-        self.view.resize(Size {
-            height: size.height.saturating_sub(2),
-            width: size.width,
-        });
-        let bar_size = Size {
-            height: 1,
-            width: size.width,
+
+        let Size { height, width } = size;
+
+        let editor_rect = Rect {
+            position: Position { row: 0, col: 0 },
+            size: Size {
+                height: height.saturating_sub(2),
+                width,
+            },
         };
-        self.message_bar.resize(bar_size);
-        self.status_bar.resize(bar_size);
-        self.command_bar.resize(bar_size);
+
+        self.layout_tree.compute_layout(editor_rect);
+        self.sync_pane_rects();
+
+        let bottom_bar_rect = Rect {
+            position: Position {
+                row: height.saturating_sub(1),
+                col: 0,
+            },
+            size: Size { height: 1, width },
+        };
+
+        let status_bar_rect = Rect {
+            position: Position {
+                row: height.saturating_sub(2),
+                col: 0,
+            },
+            size: Size { height: 1, width },
+        };
+
+        self.message_bar.resize(bottom_bar_rect);
+        self.command_bar.resize(bottom_bar_rect);
+        self.status_bar.resize(status_bar_rect);
     }
 
     // endregion
@@ -215,9 +471,9 @@ impl Editor {
     // region : quit command handling
     #[allow(clippy::arithmetic_side_effects)]
     fn handle_quit_command(&mut self) {
-        if !self.view.get_status().is_modified || self.quit_times + 1 == QUIT_TIMES {
+        if !self.active_view_mut().get_status().is_modified || self.quit_times + 1 == QUIT_TIMES {
             self.should_quit = true;
-        } else if self.view.get_status().is_modified {
+        } else if self.active_view_mut().get_status().is_modified {
             self.update_message(&format!(
                 "Warning! File has unsaved changes. Press Ctrl-Q {} more times to quit.",
                 QUIT_TIMES - self.quit_times - 1
@@ -234,16 +490,16 @@ impl Editor {
     //endregion
     // region : undo & redo
     fn handle_redo_command(&mut self) {
-        self.view.redo();
+        self.active_view_mut().redo();
     }
     fn handle_undo_command(&mut self) {
-        self.view.undo();
+        self.active_view_mut().undo();
     }
 
     // region : save command & prompt handling
 
     fn handle_save_command(&mut self) {
-        if self.view.is_file_loaded() {
+        if self.active_view_mut().is_file_loaded() {
             self.save(None);
         } else {
             self.set_prompt(PromptType::Save);
@@ -252,7 +508,11 @@ impl Editor {
 
     fn process_command_during_save(&mut self, command: Command) {
         match command {
-            System(Quit | Resize(_) | Search | Save | Undo | Redo) | Move(_) => {} //already handled
+            System(
+                Quit | Resize(_) | Search | Save | Undo | Redo | SplitHorizontal | SplitVertical
+                | OpenCommandBar,
+            )
+            | Move(_) => {} //already handled
             System(Dismiss) => {
                 self.set_prompt(PromptType::None);
                 self.update_message("Save aborted");
@@ -263,13 +523,14 @@ impl Editor {
                 self.set_prompt(PromptType::None);
             }
             Edit(edit_command) => self.command_bar.handle_edit_command(edit_command),
+            Mouse(_) => {}
         }
     }
     fn save(&mut self, file_name: Option<&str>) {
         let result = if let Some(name) = file_name {
-            self.view.save_as(name)
+            self.active_view_mut().save_as(name)
         } else {
-            self.view.save()
+            self.active_view_mut().save()
         };
         if result.is_ok() {
             self.update_message("File saved successfully.");
@@ -285,26 +546,93 @@ impl Editor {
         match command {
             System(Dismiss) => {
                 self.set_prompt(PromptType::None);
-                self.view.dismiss_search();
+                self.active_view_mut().dismiss_search();
             }
             Edit(InsertNewLine) => {
                 self.set_prompt(PromptType::None);
-                self.view.exit_search();
+                self.active_view_mut().exit_search();
             }
 
             Edit(edit_command) => {
                 self.command_bar.handle_edit_command(edit_command);
                 let query = self.command_bar.value();
-                self.view.search(&query);
+                self.active_view_mut().search(&query);
             }
-            Move(Right | Down) => self.view.search_next(),
-            Move(Up | Left) => self.view.search_prev(),
-            System(Quit | Resize(_) | Search | Save | Undo | Redo) | Move(_) => {} // Not applicable during save, Resize already handled at this stage
+            Move(Right | Down) => self.active_view_mut().search_next(),
+            Move(Up | Left) => self.active_view_mut().search_prev(),
+            System(
+                Quit | Resize(_) | Search | Save | Undo | Redo | SplitHorizontal | SplitVertical
+                | OpenCommandBar,
+            )
+            | Move(_) => {} // Not applicable during save, Resize already handled at this stage
+            Mouse(_) => {}
         }
     }
 
     // endregion
+    // region: pane focus and close
+    fn handle_pane_commands(&mut self, command: Command) {
+        match command {
+            System(Dismiss) => {
+                self.set_prompt(PromptType::None);
+            }
+            Edit(InsertNewLine) => {
+                let input = self.command_bar.value();
+                self.execute_pane_command(&input);
+                self.set_prompt(PromptType::None);
+            }
 
+            Edit(edit_command) => {
+                self.command_bar.handle_edit_command(edit_command);
+            }
+            _ => {}
+        }
+    }
+    fn execute_pane_command(&mut self, input: &str) {
+        let parts: Vec<&str> = input.split_whitespace().collect();
+        match parts.as_slice() {
+            ["focus", id_str] => {
+                if let Ok(id) = id_str.parse::<usize>() {
+                    if self.pane_manager.get_pane(id).is_some() {
+                        self.pane_manager.set_active_pane(id);
+                    } else {
+                        self.update_message(&format!("Pane {} not found", id));
+                    }
+                }
+            }
+            ["close", id_str] => {
+                if let Ok(id) = id_str.parse::<usize>() {
+                    self.close_pane(id);
+                }
+            }
+            ["close"] => {
+                // we will close the current active pane
+                let id = self.pane_manager.active_pane().unwrap().pane_id;
+                self.close_pane(id);
+            }
+
+            _ => self.update_message("Invalid command! Try 'focus 1' or 'close 1' or close"),
+        }
+    }
+    fn close_pane(&mut self, id: usize) {
+        // Remove from the layout tree
+        if self.layout_tree.remove_node(id).is_ok() {
+            // Remove from pane manager
+            self.pane_manager.remove_pane(id);
+
+            // need to assign new pane_id in the pane manager
+            if self.pane_manager.active_pane().is_none() {
+                if let Some((any_id, _)) = self.layout_tree.collect_leaf_layouts().first() {
+                    self.pane_manager.set_active_pane(*any_id);
+                }
+            }
+            // we resize, ultimately we should improve the above logic in future
+            self.handle_resize_command(self.terminal_size);
+            self.update_message(&format!("Pane {} closed", id));
+        } else {
+            self.update_message("Cannot close the last pane!");
+        }
+    }
     // region: message & command bar
     fn update_message(&mut self, new_message: &str) {
         self.message_bar.update_message(new_message);
@@ -321,13 +649,26 @@ impl Editor {
             PromptType::None => self.message_bar.mark_redraw(true),
             PromptType::Save => self.command_bar.set_prompt("Save as: "),
             PromptType::Search => {
-                self.view.enter_search();
+                self.active_view_mut().enter_search();
                 self.command_bar
                     .set_prompt("Search (Esc to cancel, Arrows to navigate): ");
             }
+            PromptType::FocusPane => self
+                .command_bar
+                .set_prompt("focus [Pane ID] to focus on that pane"),
+            PromptType::ClosePane => self.command_bar.set_prompt(
+                "close [Pane ID] to closethat pane, if no Pane ID the current active will close",
+            ),
         }
         self.command_bar.clear_value();
         self.prompt_type = prompt_type;
+    }
+    fn sync_pane_rects(&mut self) {
+        for (pane_id, rect) in self.layout_tree.collect_leaf_layouts() {
+            if let Some(pane) = self.pane_manager.get_pane_mut(pane_id) {
+                pane.resize(rect);
+            }
+        }
     }
     // endregion
 }
