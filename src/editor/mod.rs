@@ -655,10 +655,10 @@ impl Editor {
             }
             PromptType::FocusPane => self
                 .command_bar
-                .set_prompt("So you want to close the pane huh"),
-            PromptType::ClosePane => self
-                .command_bar
-                .set_prompt("So you want to close the pane yonro"),
+                .set_prompt("focus [Pane ID] to focus on that pane"),
+            PromptType::ClosePane => self.command_bar.set_prompt(
+                "close [Pane ID] to closethat pane, if no Pane ID the current active will close",
+            ),
         }
         self.command_bar.clear_value();
         self.prompt_type = prompt_type;

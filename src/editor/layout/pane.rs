@@ -11,7 +11,6 @@ be concerned with what is inside and what size and geometry.
 Pane should know:
     - what it displays
     - whether it is focused
-    - geometry assigned to it
 */
 use crate::{
     editor::uicomponents::{UIComponent, View},
